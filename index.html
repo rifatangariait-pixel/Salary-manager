@@ -1,0 +1,63 @@
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Multi-Branch Salary System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      /* Custom Scrollbar for large tables */
+      .custom-scrollbar::-webkit-scrollbar {
+        height: 8px;
+        width: 8px;
+      }
+      .custom-scrollbar::-webkit-scrollbar-track {
+        background: #f1f1f1;
+      }
+      .custom-scrollbar::-webkit-scrollbar-thumb {
+        background: #cbd5e1;
+        border-radius: 4px;
+      }
+      .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+        background: #94a3b8;
+      }
+      
+      @media print {
+        @page {
+          size: landscape;
+          margin: 0.5cm;
+        }
+        .no-print {
+          display: none !important;
+        }
+        .print-only {
+          display: block !important;
+        }
+        body {
+          -webkit-print-color-adjust: exact;
+          print-color-adjust: exact;
+        }
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "recharts": "https://aistudiocdn.com/recharts@^3.5.0",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.555.0",
+    "html2canvas": "https://aistudiocdn.com/html2canvas@^1.4.1",
+    "jspdf": "https://aistudiocdn.com/jspdf@^2.5.1",
+    "jszip": "https://aistudiocdn.com/jszip@^3.10.1",
+    "jsrsasign": "https://esm.sh/jsrsasign@11.1.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs"
+  }
+}
+</script>
+</head>
+  <body class="bg-gray-50 text-slate-900 antialiased">
+    <div id="root"></div>
+  </body>
+</html>
