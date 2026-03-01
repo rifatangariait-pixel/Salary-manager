@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Center, Branch, Employee, CenterCollectionRecord } from '../types';
-import { Building, MapPin, Plus, Edit2, Trash2, Save, X, Search, User, FileSpreadsheet, Upload, CheckCircle, AlertCircle, List, Download, Filter, FileText, Loader2 } from 'lucide-react';
+import { Building, MapPin, Plus, Edit2, Trash2, Save, X, Search, User, FileSpreadsheet, Upload, CheckCircle, AlertCircle, List, Download, Filter, FileText, Loader2, Users } from 'lucide-react';
 import { parseCentersCSV } from '../services/importService';
 import { exportCentersToCSV } from '../services/exportService';
 import { downloadSinglePDF } from '../services/pdfGenerator';
@@ -38,12 +38,14 @@ const ManageCenters: React.FC<ManageCentersProps> = ({ centers, branches, employ
     branchId: string;
     assignedEmployeeId: string;
     type: 'OWN' | 'OFFICE';
+    memberCount: string;
   }>({
     centerCode: '',
     centerName: '',
     branchId: '',
     assignedEmployeeId: '',
-    type: 'OWN'
+    type: 'OWN',
+    memberCount: ''
   });
 
   // Auto-set Type based on Code (Odd=Own, Even=Office) if not manually changed
@@ -72,14 +74,26 @@ const ManageCenters: React.FC<ManageCentersProps> = ({ centers, branches, employ
 
   // Validation
   const validateForm = () => {
-    if (!formData.centerCode || !formData.centerName || !formData.branchId || !formData.assignedEmployeeId) {
+    if (!formData.centerCode || !formData.centerName || !formData.branchId || !formData.assignedEmployeeId || !formData.memberCount) {
       alert("All fields are required.");
       return false;
     }
     
     const code = parseInt(formData.centerCode);
+    const members = parseInt(formData.memberCount);
+
     if (isNaN(code)) {
         alert("Center Code must be a number.");
+        return false;
+    }
+
+    if (isNaN(members) || members < 1) {
+        alert("Member count must be a positive integer (min 1).");
+        return false;
+    }
+
+    if (members > 100) {
+        alert("Member count cannot exceed 100.");
         return false;
     }
 
@@ -107,7 +121,8 @@ const ManageCenters: React.FC<ManageCentersProps> = ({ centers, branches, employ
         centerName: formData.centerName,
         branchId: formData.branchId,
         assignedEmployeeId: formData.assignedEmployeeId,
-        type: formData.type
+        type: formData.type,
+        memberCount: parseInt(formData.memberCount)
     };
 
     if (editingId) {
@@ -119,7 +134,7 @@ const ManageCenters: React.FC<ManageCentersProps> = ({ centers, branches, employ
     }
     
     // Reset Form
-    setFormData({ centerCode: '', centerName: '', branchId: '', assignedEmployeeId: '', type: 'OWN' });
+    setFormData({ centerCode: '', centerName: '', branchId: '', assignedEmployeeId: '', type: 'OWN', memberCount: '' });
   };
 
   const startEdit = (center: Center) => {
@@ -129,7 +144,8 @@ const ManageCenters: React.FC<ManageCentersProps> = ({ centers, branches, employ
         centerName: center.centerName,
         branchId: center.branchId,
         assignedEmployeeId: center.assignedEmployeeId,
-        type: center.type || (center.centerCode % 2 !== 0 ? 'OWN' : 'OFFICE')
+        type: center.type || (center.centerCode % 2 !== 0 ? 'OWN' : 'OFFICE'),
+        memberCount: center.memberCount ? center.memberCount.toString() : ''
     });
     setIsAdding(true);
     setViewMode('LIST'); // Force switch to list if in bulk mode
@@ -138,7 +154,7 @@ const ManageCenters: React.FC<ManageCentersProps> = ({ centers, branches, employ
   const cancelForm = () => {
     setIsAdding(false);
     setEditingId(null);
-    setFormData({ centerCode: '', centerName: '', branchId: '', assignedEmployeeId: '', type: 'OWN' });
+    setFormData({ centerCode: '', centerName: '', branchId: '', assignedEmployeeId: '', type: 'OWN', memberCount: '' });
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -158,13 +174,13 @@ const ManageCenters: React.FC<ManageCentersProps> = ({ centers, branches, employ
   };
 
   const handleDownloadSample = () => {
-    const headers = ['center_code', 'center_name', 'branch', 'employee_code', 'type'];
+    const headers = ['center_code', 'center_name', 'branch', 'employee_code', 'type', 'member_count'];
     const branchName = branches[0]?.name || 'Branch Name';
     const empId = employees[0]?.id || 'E-001';
     
     const sampleRows = [
-      ['101', 'North Market Center', branchName, empId, 'OWN'],
-      ['102', 'South Bazar Point', branchName, empId, 'OFFICE']
+      ['101', 'North Market Center', branchName, empId, 'OWN', '45'],
+      ['102', 'South Bazar Point', branchName, empId, 'OFFICE', '30']
     ];
     
     const csvContent = [
@@ -222,11 +238,11 @@ const ManageCenters: React.FC<ManageCentersProps> = ({ centers, branches, employ
 
   const handleExportPDF = () => {
       setIsGeneratingPDF(true);
-      // Wait for the hidden component to render (Increased time for safety)
+      // Increased wait time slightly to ensure render
       setTimeout(async () => {
           await downloadSinglePDF('center-list-pdf-render', `Center_List_Report_${new Date().toISOString().slice(0, 10)}`);
           setIsGeneratingPDF(false);
-      }, 2500);
+      }, 3000);
   };
 
   // Prepare filter info text for PDF header
@@ -243,8 +259,8 @@ const ManageCenters: React.FC<ManageCentersProps> = ({ centers, branches, employ
   return (
     <div className="max-w-6xl mx-auto h-full flex flex-col space-y-4 relative">
        
-       {/* Hidden Print Container - Positioned off-screen to allow rendering by html2canvas but hidden from user */}
-       <div style={{ position: 'fixed', left: '-10000px', top: 0, width: '210mm' }}>
+       {/* Hidden Print Container - Positioned absolutely off-screen to avoid viewport clipping during capture */}
+       <div style={{ position: 'absolute', left: '-5000px', top: 0 }}>
            {isGeneratingPDF && (
                <div id="center-list-pdf-render">
                    <CenterListPrint 
@@ -397,6 +413,20 @@ const ManageCenters: React.FC<ManageCentersProps> = ({ centers, branches, employ
                                     />
                                 </div>
                                 <div>
+                                    <label className="text-xs font-semibold text-slate-600 mb-1 block">Member Count *</label>
+                                    <input 
+                                        required 
+                                        type="number"
+                                        min="1"
+                                        max="100"
+                                        placeholder="e.g. 45"
+                                        value={formData.memberCount}
+                                        onChange={e => setFormData({...formData, memberCount: e.target.value})}
+                                        className="w-full border border-slate-300 rounded px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 outline-none font-bold"
+                                    />
+                                    <p className="text-[10px] text-slate-500 mt-1">Total active members (1-100).</p>
+                                </div>
+                                <div>
                                     <label className="text-xs font-semibold text-slate-600 mb-1 block">Center Type *</label>
                                     <select 
                                         required 
@@ -422,7 +452,7 @@ const ManageCenters: React.FC<ManageCentersProps> = ({ centers, branches, employ
                                         ))}
                                     </select>
                                 </div>
-                                <div className="md:col-span-2">
+                                <div>
                                     <label className="text-xs font-semibold text-slate-600 mb-1 block">Assigned Field Officer *</label>
                                     <select 
                                         required 
@@ -453,12 +483,13 @@ const ManageCenters: React.FC<ManageCentersProps> = ({ centers, branches, employ
                         <table className="w-full text-left text-sm">
                             <thead className="bg-slate-50 text-slate-600 font-medium sticky top-0 z-10 shadow-sm">
                                 <tr>
-                                    <th className="p-3 border-b">Code</th>
+                                    <th className="p-3 border-b w-24">Code</th>
                                     <th className="p-3 border-b">Center Name</th>
+                                    <th className="p-3 border-b w-32 text-center">Members</th>
                                     <th className="p-3 border-b">Branch</th>
                                     <th className="p-3 border-b">Field Officer</th>
-                                    <th className="p-3 border-b text-center">Type</th>
-                                    <th className="p-3 border-b text-right">Actions</th>
+                                    <th className="p-3 border-b text-center w-24">Type</th>
+                                    <th className="p-3 border-b text-right w-24">Actions</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
@@ -473,6 +504,11 @@ const ManageCenters: React.FC<ManageCentersProps> = ({ centers, branches, employ
                                             <tr key={center.id} className="hover:bg-slate-50 transition-colors">
                                                 <td className="p-3 font-mono font-bold text-slate-700">{center.centerCode}</td>
                                                 <td className="p-3 font-medium text-slate-800">{center.centerName}</td>
+                                                <td className="p-3 text-center">
+                                                    <span className="bg-slate-100 text-slate-600 font-bold px-2 py-0.5 rounded border border-slate-200 text-xs flex items-center justify-center gap-1 mx-auto w-fit">
+                                                        <Users size={10} /> {center.memberCount || 0}
+                                                    </span>
+                                                </td>
                                                 <td className="p-3 text-slate-500">
                                                     <div className="flex items-center gap-1">
                                                         <Building size={12} /> {branch?.name || 'Unknown'}
@@ -513,7 +549,7 @@ const ManageCenters: React.FC<ManageCentersProps> = ({ centers, branches, employ
                                     })
                                 ) : (
                                     <tr>
-                                        <td colSpan={6} className="p-8 text-center text-slate-400">
+                                        <td colSpan={7} className="p-8 text-center text-slate-400">
                                             No centers found matching your filters.
                                         </td>
                                     </tr>
@@ -540,7 +576,7 @@ const ManageCenters: React.FC<ManageCentersProps> = ({ centers, branches, employ
                                     <strong> Branch</strong> and <strong>Employee ID</strong> must already exist in the system.
                                 </p>
                                 <p className="text-xs text-slate-500 font-mono bg-white p-2 rounded border border-orange-200">
-                                    Required Headers: center_code, center_name, branch, employee_code, type (optional)
+                                    Required Headers: center_code, center_name, branch, employee_code, type (optional), member_count (optional)
                                 </p>
                             </div>
                             <button 
@@ -602,6 +638,7 @@ const ManageCenters: React.FC<ManageCentersProps> = ({ centers, branches, employ
                                                 <tr>
                                                     <th className="p-2 border-b">Code</th>
                                                     <th className="p-2 border-b">Center Name</th>
+                                                    <th className="p-2 border-b">Members</th>
                                                     <th className="p-2 border-b">Branch</th>
                                                     <th className="p-2 border-b">Officer ID</th>
                                                     <th className="p-2 border-b">Type</th>
@@ -614,6 +651,7 @@ const ManageCenters: React.FC<ManageCentersProps> = ({ centers, branches, employ
                                                         <tr key={i}>
                                                             <td className="p-2 font-mono">{c.centerCode}</td>
                                                             <td className="p-2">{c.centerName}</td>
+                                                            <td className="p-2 text-center font-bold text-slate-600">{c.memberCount || 0}</td>
                                                             <td className="p-2">{branchName}</td>
                                                             <td className="p-2 font-mono text-slate-500">{c.assignedEmployeeId}</td>
                                                             <td className="p-2">{c.type || 'Auto'}</td>

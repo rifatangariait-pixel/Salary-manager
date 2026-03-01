@@ -123,14 +123,24 @@ const Leaderboard: React.FC<LeaderboardProps> = ({ rows, branches, month, accoun
       // Highest Account Openings
       // Count accounts opened in this month per employee
       const empAccountCounts: Record<string, number> = {};
+      
+      // Create a set of valid employee IDs from the current rows to ensure we only rank visible employees
+      // Normalize to uppercase for case-insensitive matching
+      const validEmployeeIds = new Set(rows.map(r => r.employee.id.toUpperCase()));
+
       accounts.forEach(acc => {
-          if (acc.opening_date.startsWith(month)) {
-              empAccountCounts[acc.opened_by_employee_id] = (empAccountCounts[acc.opened_by_employee_id] || 0) + 1;
+          // Check if account is active, in the selected month, and belongs to a visible employee
+          const empId = acc.opened_by_employee_id.toUpperCase();
+          if (acc.status === 'ACTIVE' && acc.opening_date.startsWith(month) && validEmployeeIds.has(empId)) {
+              empAccountCounts[empId] = (empAccountCounts[empId] || 0) + 1;
           }
       });
 
-      let maxAccId = null;
+      console.log('[Leaderboard] Account Counts:', empAccountCounts);
+
+      let maxAccId: string | null = null;
       let maxAccCount = -1;
+      
       Object.entries(empAccountCounts).forEach(([id, count]) => {
           if (count > maxAccCount) {
               maxAccCount = count;
@@ -138,11 +148,12 @@ const Leaderboard: React.FC<LeaderboardProps> = ({ rows, branches, month, accoun
           }
       });
 
-      const maxAccRow = maxAccId ? rows.find(r => r.employee.id === maxAccId) : null;
+      const maxAccRow = maxAccId ? rows.find(r => r.employee.id.toUpperCase() === maxAccId) : null;
 
+      // Safe spread with explicit casting to avoid TS2698
       return {
-          loanChampion: maxLoanRow && maxLoan > 0 ? { ...maxLoanRow, value: maxLoan } : null,
-          accountChampion: maxAccRow && maxAccCount > 0 ? { ...maxAccRow, value: maxAccCount } : null
+          loanChampion: (maxLoanRow && maxLoan > 0) ? { ...(maxLoanRow as SalaryRow), value: maxLoan } : null,
+          accountChampion: (maxAccRow && maxAccCount > 0) ? { ...(maxAccRow as SalaryRow), value: maxAccCount } : null
       };
   }, [rows, accounts, month]);
 

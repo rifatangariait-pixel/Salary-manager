@@ -1,7 +1,7 @@
 
 export interface SheetRow {
   rowIndex?: number; // Google Sheet Row Index for updates
-  status?: 'ACTIVE' | 'INACTIVE' | 'PENDING';
+  status?: 'ACTIVE' | 'INACTIVE' | 'PENDING' | 'ADJUSTED';
 }
 
 export interface Branch extends SheetRow {
@@ -44,13 +44,16 @@ export interface SalarySheet extends SheetRow {
 export interface SalaryEntry extends SheetRow {
   id: string;
   salary_sheet_id: string;
+  month?: string; // Added for history tracking
   employee_id: string;
   basic_salary: number;
   commission_type?: CommissionType;
   own_somity_count: number;
   own_somity_collection: number;
+  own_somity_member_count?: number; // New: Track members involved
   office_somity_count: number;
   office_somity_collection: number;
+  office_somity_member_count?: number; // New: Track members involved
   center_count: number;
   center_collection: number;
   total_loan_collection: number;
@@ -99,11 +102,28 @@ export interface Book extends SheetRow {
 export interface AccountOpening extends SheetRow {
   id: number;
   account_code: string;
+  center_code: number; // MANDATORY NEW FIELD
+  branch_id: string;
+  opening_date: string;
   term: number;
   collection_amount: number;
   opened_by_employee_id: string;
-  branch_id: string;
-  opening_date: string;
+  
+  // Customer Details
+  customer_name: string;
+  father_husband_name: string;
+  gender: 'MALE' | 'FEMALE' | 'OTHER';
+  dob: string;
+  nid: string;
+  mobile: string;
+  address: string;
+  
+  // Nominee Details
+  nominee_name?: string;
+  nominee_relation?: string;
+  agent_name?: string;
+
+  // System Status
   is_counted: boolean;
   counted_month: string | null;
   salary_sheet_id: string | null;
@@ -117,7 +137,8 @@ export interface CenterCollectionRecord extends SheetRow {
   amount: number;
   loanAmount?: number;
   type: 'OWN' | 'OFFICE';
-  createdAt: string;
+  collectionDate: string; // RENAMED: Business Date (YYYY-MM-DD)
+  submittedAt?: string;   // NEW: System Entry Timestamp
 }
 
 export interface Center extends SheetRow {
@@ -127,6 +148,7 @@ export interface Center extends SheetRow {
   branchId: string;
   assignedEmployeeId: string;
   type?: 'OWN' | 'OFFICE';
+  memberCount?: number;
 }
 
 export interface Target extends SheetRow {
@@ -135,6 +157,16 @@ export interface Target extends SheetRow {
   month: string; // YYYY-MM
   collectionTarget: number;
   accountTarget: number;
+}
+
+export interface Advance extends SheetRow {
+  id: string;
+  employeeId: string;
+  amount: number;
+  date: string;
+  targetMonth: string; // YYYY-MM
+  status: 'ACTIVE' | 'ADJUSTED' | 'INACTIVE';
+  notes?: string;
 }
 
 export type UserRole = 'SUPER_ADMIN' | 'ADMIN' | 'OWNER' | 'MANAGER' | 'USER' | 'AUDITOR';

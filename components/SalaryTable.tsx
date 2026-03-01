@@ -1,10 +1,10 @@
-
-import React, { useCallback, useState, useEffect, useRef } from 'react';
+import React, { useCallback, useState, useEffect, useRef, useMemo } from 'react';
 import { SalaryRow, SalaryEntry, AccountOpening, CommissionStructure } from '../types';
 import { recalculateEntry } from '../services/logic';
 import { validateAccount } from '../services/accountService';
 import { calculateBonus } from '../services/salaryCalculation';
-import { Lock, ScanBarcode, CheckCircle2, FileText, Download, Loader2, Coins, Search, Plus, X, User } from 'lucide-react';
+import { googleSheetService } from '../services/googleSheetService';
+import { Lock, ScanBarcode, CheckCircle2, FileText, Download, Loader2, Coins, Search, Plus, X, User, Save } from 'lucide-react';
 import SalarySlip from './SalarySlip';
 import { downloadSinglePDF, createPDFBlob, saveZip } from '../services/pdfGenerator';
 
@@ -14,6 +14,7 @@ interface SalaryTableProps {
   commissionRates: Record<string, CommissionStructure>;
   onUpdateRow: (updatedEntry: SalaryEntry) => void;
   onAccountScanned: (code: string) => void;
+  onSaveScannedAccounts: (codes: string[]) => Promise<void>;
   readOnly?: boolean;
   month: string;
 }
@@ -24,13 +25,17 @@ const SalaryTableRow: React.FC<{
   commissionRates: Record<string, CommissionStructure>;
   onUpdateRow: (updatedEntry: SalaryEntry) => void;
   onAccountScanned: (code: string) => void;
+  onSaveScannedAccounts: (codes: string[]) => Promise<void>;
   readOnly: boolean;
   month: string;
   onGenerateSlip: (row: SalaryRow) => void;
-}> = ({ row, accounts, commissionRates, onUpdateRow, onAccountScanned, readOnly, month, onGenerateSlip }) => {
+  branchTotalCollection: number; // Passed from parent to help estimate incentive
+}> = ({ row, accounts, commissionRates, onUpdateRow, onAccountScanned, onSaveScannedAccounts, readOnly, month, onGenerateSlip, branchTotalCollection }) => {
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [successField, setSuccessField] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [scannedCodes, setScannedCodes] = useState<string[]>([]);
 
   useEffect(() => {
     if (error) {
@@ -38,6 +43,32 @@ const SalaryTableRow: React.FC<{
       return () => clearTimeout(timer);
     }
   }, [error]);
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+        console.log(`[SalaryTableRow] Saving row for ${row.employee.name}. Scanned codes:`, scannedCodes);
+
+        // 1. Save Salary Entry
+        await googleSheetService.upsertSalaryEntry(row, month);
+        
+        // 2. Save Scanned Accounts Status
+        if (scannedCodes.length > 0) {
+            await onSaveScannedAccounts(scannedCodes);
+            setScannedCodes([]); // Clear pending codes after successful save
+        } else {
+            console.log("[SalaryTableRow] No scanned codes to save.");
+        }
+
+        setSuccessField('save');
+        setTimeout(() => setSuccessField(null), 2000);
+    } catch (e) {
+        console.error("Failed to save:", e);
+        setError("Failed to save");
+    } finally {
+        setIsSaving(false);
+    }
+  };
 
   const handleInputChange = useCallback((
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>, 
@@ -58,15 +89,27 @@ const SalaryTableRow: React.FC<{
 
     // Calculate with employee's commission type (prefer updated entry type, else fallback)
     const commTypeForCalc = (field === 'commission_type' ? (value as string) : row.commission_type) as string;
+    
+    // Determine context for Manager Incentive Recalculation (Local Estimate)
+    const isManager = row.employee.designation === 'Branch Manager';
+    
+    // Adjust Branch Total if the edited field affects collection
+    let effectiveBranchTotal = branchTotalCollection;
+    if (field === 'center_collection') {
+        const oldVal = row.center_collection || 0;
+        const newVal = (value as number) || 0;
+        effectiveBranchTotal = branchTotalCollection - oldVal + newVal;
+    }
 
     const recalculate = recalculateEntry(
         updatedEntry, 
         row.employee.base_salary, 
         commissionRates,
-        commTypeForCalc || row.employee.commission_type || 'A'
+        commTypeForCalc || row.employee.commission_type || 'A',
+        { isManager, branchTotalCollection: effectiveBranchTotal }
     );
     onUpdateRow(recalculate);
-  }, [row, onUpdateRow, readOnly, commissionRates]);
+  }, [row, onUpdateRow, readOnly, commissionRates, branchTotalCollection]);
 
   const handleCodeBlur = () => {
     if (!code.trim() || readOnly) return;
@@ -101,12 +144,18 @@ const SalaryTableRow: React.FC<{
       if (field) {
         const newVal = (row[field] as number) + 1;
         const updatedEntry = { ...row, [field]: newVal };
-        // Recalculate with existing commission type
+        
+        // Track scanned code for saving later
+        setScannedCodes(prev => [...prev, validation.account!.account_code]);
+
+        // Recalculate with existing commission type & context
+        const isManager = row.employee.designation === 'Branch Manager';
         const recalculated = recalculateEntry(
             updatedEntry, 
             row.employee.base_salary, 
             commissionRates,
-            row.commission_type || row.employee.commission_type || 'A'
+            row.commission_type || row.employee.commission_type || 'A',
+            { isManager, branchTotalCollection }
         );
         onUpdateRow(recalculated);
         
@@ -185,6 +234,14 @@ const SalaryTableRow: React.FC<{
               title="Generate Slip"
             >
               <FileText size={18} />
+            </button>
+            <button 
+              onClick={handleSave}
+              disabled={isSaving}
+              className={`p-2 rounded-md transition-colors ${successField === 'save' ? 'text-green-600 bg-green-50' : 'text-slate-400 hover:text-indigo-600 hover:bg-indigo-50'}`}
+              title="Save Entry"
+            >
+              {isSaving ? <Loader2 size={18} className="animate-spin" /> : (successField === 'save' ? <CheckCircle2 size={18} /> : <Save size={18} />)}
             </button>
           </div>
           
@@ -325,7 +382,7 @@ const SalaryTableRow: React.FC<{
   );
 };
 
-const SalaryTable: React.FC<SalaryTableProps> = ({ rows, accounts, commissionRates, onUpdateRow, onAccountScanned, readOnly = false, month }) => {
+const SalaryTable: React.FC<SalaryTableProps> = ({ rows, accounts, commissionRates, onUpdateRow, onAccountScanned, onSaveScannedAccounts, readOnly = false, month }) => {
   const [isBulkGenerating, setIsBulkGenerating] = useState(false);
   const [hiddenSlipData, setHiddenSlipData] = useState<SalaryRow | null>(null);
 
@@ -337,7 +394,25 @@ const SalaryTable: React.FC<SalaryTableProps> = ({ rows, accounts, commissionRat
   const centerInputRef = useRef<HTMLInputElement>(null);
   const centerAmountRef = useRef<HTMLInputElement>(null);
 
+  // Dynamic Branch Totals Calculation (Memoized from current rows state)
+  const branchTotals = useMemo(() => {
+      const totals: Record<string, number> = {};
+      rows.forEach(r => {
+          // Sum up all collections for this employee
+          const total = (r.own_somity_collection || 0) + (r.office_somity_collection || 0) + (r.center_collection || 0) + (r.total_loan_collection || 0);
+          totals[r.branch.id] = (totals[r.branch.id] || 0) + total;
+      });
+      return totals;
+  }, [rows]);
+
   const handleGenerateSlip = async (row: SalaryRow) => {
+    // Save to history before generating
+    try {
+        await googleSheetService.upsertSalaryEntry(row, month);
+    } catch (e) {
+        console.error("Failed to save salary record:", e);
+    }
+
     setHiddenSlipData(row);
     setTimeout(async () => {
        await downloadSinglePDF('hidden-salary-slip', `Salary_Slip_${row.employee.name.replace(/\s+/g, '_')}_${month}`);
@@ -348,6 +423,15 @@ const SalaryTable: React.FC<SalaryTableProps> = ({ rows, accounts, commissionRat
   const handleGenerateAllSlips = async () => {
     if (rows.length === 0) return;
     setIsBulkGenerating(true);
+
+    // Save all records first
+    try {
+        await googleSheetService.upsertSalaryEntries(rows, month);
+    } catch (e) {
+        console.error("Failed to save salary records:", e);
+        alert("Warning: Failed to save salary records to history. Download will continue.");
+    }
+
     const blobs: { name: string; blob: Blob }[] = [];
     for (const row of rows) {
       setHiddenSlipData(row);
@@ -387,12 +471,19 @@ const SalaryTable: React.FC<SalaryTableProps> = ({ rows, accounts, commissionRat
         center_collection: (foundEmployeeRow.center_collection || 0) + amount
     };
     
-    // Recalculate logic including commission
+    // Determine context
+    const isManager = foundEmployeeRow.employee.designation === 'Branch Manager';
+    // Calculate new total estimate (Current Total + Added Amount)
+    const currentBranchTotal = branchTotals[foundEmployeeRow.branch.id] || 0;
+    const newBranchTotal = currentBranchTotal + amount;
+
+    // Recalculate logic including commission & incentive
     const recalculated = recalculateEntry(
         updatedEntry, 
         foundEmployeeRow.employee.base_salary,
         commissionRates,
-        foundEmployeeRow.commission_type || foundEmployeeRow.employee.commission_type || 'A'
+        foundEmployeeRow.commission_type || foundEmployeeRow.employee.commission_type || 'A',
+        { isManager, branchTotalCollection: newBranchTotal }
     );
     
     onUpdateRow(recalculated);
@@ -616,9 +707,11 @@ const SalaryTable: React.FC<SalaryTableProps> = ({ rows, accounts, commissionRat
                 commissionRates={commissionRates}
                 onUpdateRow={onUpdateRow} 
                 onAccountScanned={onAccountScanned}
+                onSaveScannedAccounts={onSaveScannedAccounts}
                 readOnly={readOnly}
                 month={month}
                 onGenerateSlip={handleGenerateSlip}
+                branchTotalCollection={branchTotals[row.branch.id] || 0} // Passing context
               />
             ))}
           </tbody>

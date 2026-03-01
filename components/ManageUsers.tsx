@@ -23,6 +23,7 @@ const ManageUsers: React.FC<ManageUsersProps> = ({ users, branches, employees, o
   const [role, setRole] = useState<UserRole>('MANAGER');
   const [branchId, setBranchId] = useState('');
   const [employeeId, setEmployeeId] = useState('');
+  const [avatar, setAvatar] = useState('');
 
   // Edit Form State
   const [editName, setEditName] = useState('');
@@ -31,6 +32,7 @@ const ManageUsers: React.FC<ManageUsersProps> = ({ users, branches, employees, o
   const [editRole, setEditRole] = useState<UserRole>('MANAGER');
   const [editBranchId, setEditBranchId] = useState('');
   const [editEmployeeId, setEditEmployeeId] = useState('');
+  const [editAvatar, setEditAvatar] = useState('');
 
   const handleAdd = (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,7 +47,7 @@ const ManageUsers: React.FC<ManageUsersProps> = ({ users, branches, employees, o
       role,
       branch_id: (role === 'MANAGER' || role === 'USER') ? branchId : undefined,
       employee_id: role === 'USER' ? employeeId : undefined,
-      avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=random&color=fff`
+      avatar: avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=random&color=fff`
     });
 
     setName('');
@@ -54,6 +56,7 @@ const ManageUsers: React.FC<ManageUsersProps> = ({ users, branches, employees, o
     setRole('MANAGER');
     setBranchId('');
     setEmployeeId('');
+    setAvatar('');
     setIsAdding(false);
   };
 
@@ -65,6 +68,7 @@ const ManageUsers: React.FC<ManageUsersProps> = ({ users, branches, employees, o
     setEditRole(user.role);
     setEditBranchId(user.branch_id || '');
     setEditEmployeeId(user.employee_id || '');
+    setEditAvatar(user.avatar || '');
   };
 
   const handleUpdate = (e: React.FormEvent) => {
@@ -77,12 +81,10 @@ const ManageUsers: React.FC<ManageUsersProps> = ({ users, branches, employees, o
       role: editRole,
       branch_id: (editRole === 'MANAGER' || editRole === 'USER') ? editBranchId : undefined,
       employee_id: editRole === 'USER' ? editEmployeeId : undefined,
-      password: editPassword 
+      password: editPassword,
+      avatar: editAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(editName)}&background=random&color=fff`
     };
     
-    // Update avatar if name changed
-    updatedData.avatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(editName)}&background=random&color=fff`;
-
     onEditUser(editingId, updatedData);
     setEditingId(null);
   };
@@ -147,6 +149,14 @@ const ManageUsers: React.FC<ManageUsersProps> = ({ users, branches, employees, o
                      </div>
                   </div>
                   <div>
+                     <label className="text-xs font-semibold text-slate-600 mb-1 block">Photo URL (Optional)</label>
+                     <input 
+                       type="text" value={avatar} onChange={e => setAvatar(e.target.value)}
+                       placeholder="https://example.com/photo.jpg"
+                       className="w-full border border-slate-300 rounded px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                     />
+                  </div>
+                  <div>
                     <label className="text-xs font-semibold text-slate-600 mb-1 block">Role</label>
                     <select 
                       value={role} onChange={e => setRole(e.target.value as UserRole)}
@@ -203,7 +213,7 @@ const ManageUsers: React.FC<ManageUsersProps> = ({ users, branches, employees, o
 
           {/* Users List */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {users.map(user => {
+            {users.map((user, idx) => {
               const userBranch = branches.find(b => b.id === user.branch_id);
               const userEmployee = employees.find(e => e.id === user.employee_id);
               
@@ -215,7 +225,7 @@ const ManageUsers: React.FC<ManageUsersProps> = ({ users, branches, employees, o
               if (user.role === 'USER') roleColor = 'bg-blue-100 text-blue-700';
 
               return (
-                <div key={user.id} className="bg-white border border-slate-200 rounded-xl p-5 hover:shadow-md transition-shadow relative group">
+                <div key={`${user.id}-${idx}`} className="bg-white border border-slate-200 rounded-xl p-5 hover:shadow-md transition-shadow relative group">
                    <div className="flex items-start justify-between">
                       <div className="flex items-center gap-3">
                          <img src={user.avatar} alt={user.name} className="w-12 h-12 rounded-full border border-slate-100" />
@@ -310,6 +320,15 @@ const ManageUsers: React.FC<ManageUsersProps> = ({ users, branches, employees, o
                     />
                    </div>
                    <p className="text-[10px] text-slate-400 mt-1">Visible for demo purposes only.</p>
+                </div>
+
+                <div>
+                   <label className="text-xs font-semibold text-slate-600 mb-1 block">Photo URL</label>
+                   <input 
+                     type="text" value={editAvatar} onChange={e => setEditAvatar(e.target.value)}
+                     placeholder="https://example.com/photo.jpg"
+                     className="w-full border border-slate-300 rounded px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                   />
                 </div>
                 
                 <div>

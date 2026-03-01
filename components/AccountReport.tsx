@@ -2,7 +2,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { AccountOpening, Branch, Employee, UserRole } from '../types';
 import { exportAccountsToCSV, exportAccountDetails } from '../services/exportService';
-import { Download, Search, Edit2, Trash2, X, Save, AlertTriangle, FileDown, CheckCircle, Users, Wallet, Clock, AlertCircle, Coins, BadgeCheck, Timer, User, UserCheck } from 'lucide-react';
+import { Download, Search, Edit2, Trash2, X, Save, AlertTriangle, FileDown, CheckCircle, Users, Wallet, Clock, AlertCircle, Coins, BadgeCheck, Timer, User, UserCheck, RefreshCw } from 'lucide-react';
 
 interface AccountReportProps {
   accounts: AccountOpening[];
@@ -10,10 +10,11 @@ interface AccountReportProps {
   branches: Branch[];
   onEdit: (id: number, data: Partial<AccountOpening>) => void;
   onDelete: (id: number) => void;
+  onRefresh?: () => void;
   userRole: UserRole;
 }
 
-const AccountReport: React.FC<AccountReportProps> = ({ accounts, employees, branches, onEdit, onDelete, userRole }) => {
+const AccountReport: React.FC<AccountReportProps> = ({ accounts, employees, branches, onEdit, onDelete, onRefresh, userRole }) => {
   const [selectedMonth, setSelectedMonth] = useState<string>('');
   const [selectedBranchId, setSelectedBranchId] = useState<string>('all');
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>('all');
@@ -37,6 +38,10 @@ const AccountReport: React.FC<AccountReportProps> = ({ accounts, employees, bran
     }
   }, [successMessage]);
 
+  useEffect(() => {
+    console.log(`[AccountReport] Received ${accounts.length} accounts from parent.`);
+  }, [accounts]);
+
   // Dynamic Employee Options based on Branch Selection
   const employeeOptions = useMemo(() => {
     if (selectedBranchId === 'all') return employees;
@@ -44,7 +49,7 @@ const AccountReport: React.FC<AccountReportProps> = ({ accounts, employees, bran
   }, [employees, selectedBranchId]);
 
   const filteredData = useMemo(() => {
-    return accounts.filter(acc => {
+    const filtered = accounts.filter(acc => {
       // 1. Filter by Branch
       if (selectedBranchId !== 'all' && acc.branch_id !== selectedBranchId) return false;
       
@@ -69,6 +74,8 @@ const AccountReport: React.FC<AccountReportProps> = ({ accounts, employees, bran
 
       return true;
     });
+    console.log(`[AccountReport] Total accounts shown: ${filtered.length}`);
+    return filtered;
   }, [accounts, employees, selectedBranchId, selectedEmployeeId, selectedMonth, searchTerm]);
 
   // Summary Statistics
@@ -93,7 +100,7 @@ const AccountReport: React.FC<AccountReportProps> = ({ accounts, employees, bran
         const [openY, openM] = acc.opening_date.split('-').map(Number);
         const diff = (currentY - openY) * 12 + (currentM - openM);
         
-        if (!acc.is_counted && diff > 2) expired++;
+        if (!acc.is_counted && diff > 1) expired++;
     });
 
     return { total, bonusable, expired, totalCollection, counted };
@@ -130,23 +137,32 @@ const AccountReport: React.FC<AccountReportProps> = ({ accounts, employees, bran
     setEditingId(acc.id);
     setEditForm({
         account_code: acc.account_code,
+        center_code: acc.center_code,
+        customer_name: acc.customer_name,
+        father_husband_name: acc.father_husband_name,
+        gender: acc.gender,
+        dob: acc.dob,
+        nid: acc.nid,
+        mobile: acc.mobile,
+        address: acc.address,
+        nominee_name: acc.nominee_name,
+        nominee_relation: acc.nominee_relation,
+        agent_name: acc.agent_name,
         term: acc.term,
         collection_amount: acc.collection_amount,
         opened_by_employee_id: acc.opened_by_employee_id,
         opening_date: acc.opening_date,
-        branch_id: acc.branch_id
+        branch_id: acc.branch_id,
+        status: acc.status,
+        is_counted: acc.is_counted,
+        counted_month: acc.counted_month,
+        salary_sheet_id: acc.salary_sheet_id
     });
   };
 
   const handleSaveEdit = (e: React.FormEvent) => {
     e.preventDefault();
     if (editingId && editForm) {
-        // If employee changes, update branch automatically
-        const selectedEmp = employees.find(e => e.id === editForm.opened_by_employee_id);
-        if (selectedEmp) {
-            editForm.branch_id = selectedEmp.branch_id;
-        }
-
         onEdit(editingId, editForm);
         setEditingId(null);
         setEditForm({});
@@ -170,7 +186,7 @@ const AccountReport: React.FC<AccountReportProps> = ({ accounts, employees, bran
     const [openY, openM] = acc.opening_date.split('-').map(Number);
     const diff = (currentY - openY) * 12 + (currentM - openM);
 
-    if (diff > 2) {
+    if (diff > 1) {
         return (
              <span className="flex items-center gap-1 text-slate-500 font-bold text-[11px] bg-slate-100 px-2.5 py-1 rounded-full border border-slate-200">
                 <Clock size={12} />
@@ -197,6 +213,17 @@ const AccountReport: React.FC<AccountReportProps> = ({ accounts, employees, bran
   };
 
   const isEditingCounted = editingId ? accounts.find(a => a.id === editingId)?.is_counted : false;
+
+  const handleManualRefresh = async () => {
+      if (onRefresh) {
+          try {
+              await onRefresh();
+              setSuccessMessage("Data refreshed successfully!");
+          } catch (e) {
+              console.error("Refresh failed:", e);
+          }
+      }
+  };
 
   return (
     <div className="h-full flex flex-col space-y-4 relative">
@@ -267,7 +294,7 @@ const AccountReport: React.FC<AccountReportProps> = ({ accounts, employees, bran
              <label className="text-xs font-bold text-slate-500 uppercase flex items-center gap-1">
                 <Search size={12} /> Search
              </label>
-             <div className="relative">
+             <div className="relative flex gap-2">
                <input 
                  type="text" 
                  placeholder="Search by Code, Name or ID..."
@@ -275,16 +302,41 @@ const AccountReport: React.FC<AccountReportProps> = ({ accounts, employees, bran
                  onChange={(e) => setSearchTerm(e.target.value)}
                  className="w-full pl-3 pr-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                />
+               {(selectedMonth || selectedBranchId !== 'all' || selectedEmployeeId !== 'all' || searchTerm) && (
+                   <button 
+                       onClick={() => {
+                           setSelectedMonth('');
+                           setSelectedBranchId('all');
+                           setSelectedEmployeeId('all');
+                           setSearchTerm('');
+                       }}
+                       className="px-3 py-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors text-xs font-bold whitespace-nowrap"
+                       title="Clear All Filters"
+                   >
+                       Clear
+                   </button>
+               )}
              </div>
           </div>
         </div>
 
-        <button 
-          onClick={handleExport}
-          className="flex items-center space-x-2 px-4 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition-colors text-sm font-medium shadow-sm h-10 md:mb-0.5"
-        >
-          <Download size={16} /> <span className="hidden md:inline">Export CSV</span>
-        </button>
+        <div className="flex items-center gap-2 md:mb-0.5">
+            {onRefresh && (
+                <button 
+                    onClick={handleManualRefresh}
+                    className="flex items-center justify-center w-10 h-10 bg-white border border-slate-300 text-slate-600 rounded-lg hover:bg-slate-50 hover:text-blue-600 transition-colors shadow-sm"
+                    title="Refresh Data from Database"
+                >
+                    <RefreshCw size={18} />
+                </button>
+            )}
+            <button 
+              onClick={handleExport}
+              className="flex items-center space-x-2 px-4 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition-colors text-sm font-medium shadow-sm h-10"
+            >
+              <Download size={16} /> <span className="hidden md:inline">Export CSV</span>
+            </button>
+        </div>
       </div>
 
       {/* Employee Context Summary */}
@@ -370,14 +422,19 @@ const AccountReport: React.FC<AccountReportProps> = ({ accounts, employees, bran
           <table className="w-full text-left border-collapse text-sm">
             <thead className="bg-slate-50 text-slate-600 font-semibold sticky top-0 z-10 shadow-sm text-xs uppercase tracking-wide">
               <tr>
-                <th className="p-4 border-b border-slate-200">Account Code</th>
-                <th className="p-4 border-b border-slate-200">Term</th>
-                <th className="p-4 border-b border-slate-200">Collection</th>
-                <th className="p-4 border-b border-slate-200">Opened By</th>
-                <th className="p-4 border-b border-slate-200">Branch</th>
-                <th className="p-4 border-b border-slate-200">Date</th>
-                <th className="p-4 border-b border-slate-200">Status</th>
-                {(canEdit || canDelete) && <th className="p-4 border-b border-slate-200 text-right">Actions</th>}
+                <th className="p-4 border-b border-slate-200 whitespace-nowrap">Account Code</th>
+                <th className="p-4 border-b border-slate-200 whitespace-nowrap">Center</th>
+                <th className="p-4 border-b border-slate-200 whitespace-nowrap">Customer Name</th>
+                <th className="p-4 border-b border-slate-200 whitespace-nowrap">Father/Husband</th>
+                <th className="p-4 border-b border-slate-200 whitespace-nowrap">Mobile</th>
+                <th className="p-4 border-b border-slate-200 whitespace-nowrap">Term</th>
+                <th className="p-4 border-b border-slate-200 whitespace-nowrap">Collection</th>
+                <th className="p-4 border-b border-slate-200 whitespace-nowrap">Opened By</th>
+                <th className="p-4 border-b border-slate-200 whitespace-nowrap">Branch</th>
+                <th className="p-4 border-b border-slate-200 whitespace-nowrap">Date</th>
+                <th className="p-4 border-b border-slate-200 whitespace-nowrap">Status</th>
+                <th className="p-4 border-b border-slate-200 whitespace-nowrap">Details</th>
+                {(canEdit || canDelete) && <th className="p-4 border-b border-slate-200 text-right whitespace-nowrap">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -389,9 +446,13 @@ const AccountReport: React.FC<AccountReportProps> = ({ accounts, employees, bran
 
                   return (
                     <tr key={acc.id} className="hover:bg-slate-50/80 transition-colors">
-                      <td className="p-4 font-mono font-medium text-slate-700">{acc.account_code}</td>
+                      <td className="p-4 font-mono font-medium text-slate-700 whitespace-nowrap">{acc.account_code}</td>
+                      <td className="p-4 font-mono text-slate-600 whitespace-nowrap">{acc.center_code}</td>
+                      <td className="p-4 font-medium text-slate-800 whitespace-nowrap">{acc.customer_name}</td>
+                      <td className="p-4 text-slate-500 whitespace-nowrap">{acc.father_husband_name}</td>
+                      <td className="p-4 font-mono text-slate-600 whitespace-nowrap">{acc.mobile}</td>
                       <td className="p-4">
-                        <span className="bg-indigo-50 text-indigo-700 px-2 py-1 rounded text-xs font-bold border border-indigo-100">
+                        <span className="bg-indigo-50 text-indigo-700 px-2 py-1 rounded text-xs font-bold border border-indigo-100 whitespace-nowrap">
                           {acc.term} Yrs
                         </span>
                       </td>
@@ -405,7 +466,7 @@ const AccountReport: React.FC<AccountReportProps> = ({ accounts, employees, bran
                             )}
                         </div>
                       </td>
-                      <td className="p-4 text-slate-700">
+                      <td className="p-4 text-slate-700 whitespace-nowrap">
                         <div>
                             <div className="font-semibold text-sm leading-tight mb-0.5">{employee?.name || 'Unknown'}</div>
                             {employee && (
@@ -415,10 +476,24 @@ const AccountReport: React.FC<AccountReportProps> = ({ accounts, employees, bran
                             )}
                         </div>
                       </td>
-                      <td className="p-4 text-slate-500 text-xs font-medium">{branch?.name || 'Unknown'}</td>
-                      <td className="p-4 text-slate-500 text-xs font-mono">{acc.opening_date}</td>
-                      <td className="p-4">
+                      <td className="p-4 text-slate-500 text-xs font-medium whitespace-nowrap">{branch?.name || 'Unknown'}</td>
+                      <td className="p-4 text-slate-500 text-xs font-mono whitespace-nowrap">{acc.opening_date}</td>
+                      <td className="p-4 whitespace-nowrap">
                         {getStatusBadge(acc)}
+                      </td>
+                      <td className="p-4 text-xs text-slate-500 min-w-[200px]">
+                          <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                              <span className="text-slate-400">Gender:</span> <span className="font-medium">{acc.gender}</span>
+                              <span className="text-slate-400">DOB:</span> <span className="font-medium">{acc.dob}</span>
+                              <span className="text-slate-400">NID:</span> <span className="font-mono">{acc.nid}</span>
+                              <span className="text-slate-400">Agent:</span> <span className="font-medium">{acc.agent_name || '-'}</span>
+                              {acc.nominee_name && (
+                                <>
+                                  <span className="text-slate-400">Nominee:</span> <span className="font-medium truncate" title={acc.nominee_name}>{acc.nominee_name} ({acc.nominee_relation})</span>
+                                </>
+                              )}
+                              <span className="text-slate-400 col-span-2 truncate" title={acc.address}>{acc.address}</span>
+                          </div>
                       </td>
                       {(canEdit || canDelete) && (
                         <td className="p-4 text-right">
@@ -460,7 +535,9 @@ const AccountReport: React.FC<AccountReportProps> = ({ accounts, employees, bran
                     <div className="mb-2 bg-slate-50 w-12 h-12 rounded-full flex items-center justify-center mx-auto text-slate-300">
                         <Search size={24} />
                     </div>
-                    No account records found matching filters.
+                    {accounts.length === 0 
+                        ? "No accounts found in the database. Add some accounts first." 
+                        : "No account records found matching filters."}
                   </td>
                 </tr>
               )}
@@ -475,15 +552,15 @@ const AccountReport: React.FC<AccountReportProps> = ({ accounts, employees, bran
        {/* Edit Modal */}
        {editingId && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-200">
-            <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
-                <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden animate-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
+                <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
                     <h3 className="text-lg font-bold text-slate-800">Edit Account</h3>
                     <button onClick={() => setEditingId(null)} className="text-slate-400 hover:text-slate-600 transition-colors">
                         <X size={20} />
                     </button>
                 </div>
                 
-                <form onSubmit={handleSaveEdit} className="p-6 space-y-4">
+                <form onSubmit={handleSaveEdit} className="p-6 space-y-4 overflow-y-auto custom-scrollbar">
                     {isEditingCounted && (
                          <div className="bg-amber-50 border border-amber-200 text-amber-800 p-3 rounded-lg text-xs flex gap-2 items-start">
                              <AlertTriangle size={16} className="shrink-0 mt-0.5" />
@@ -494,54 +571,193 @@ const AccountReport: React.FC<AccountReportProps> = ({ accounts, employees, bran
                          </div>
                     )}
 
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1.5">
+                            <label className="text-sm font-semibold text-slate-700">Account Code</label>
+                            <input 
+                                type="text" 
+                                className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-slate-50"
+                                value={editForm.account_code || ''}
+                                onChange={e => setEditForm({...editForm, account_code: e.target.value})}
+                            />
+                        </div>
+                        <div className="space-y-1.5">
+                            <label className="text-sm font-semibold text-slate-700">Center Code</label>
+                            <input 
+                                type="number" 
+                                className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                                value={editForm.center_code || ''}
+                                onChange={e => setEditForm({...editForm, center_code: Number(e.target.value)})}
+                            />
+                        </div>
+                    </div>
+
                     <div className="space-y-1.5">
-                        <label className="text-sm font-semibold text-slate-700">Account Code</label>
+                        <label className="text-sm font-semibold text-slate-700">Customer Name</label>
                         <input 
                             type="text" 
-                            className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-slate-50"
-                            value={editForm.account_code || ''}
-                            onChange={e => setEditForm({...editForm, account_code: e.target.value})}
-                        />
-                    </div>
-
-                    <div className="space-y-1.5">
-                        <label className="text-sm font-semibold text-slate-700">Term (Years)</label>
-                        <select 
-                            className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-white"
-                            value={editForm.term || 5}
-                            onChange={e => setEditForm({...editForm, term: Number(e.target.value)})}
-                        >
-                            <option value={1.5}>1.5 Years</option>
-                            <option value={3}>3 Years</option>
-                            <option value={5}>5 Years</option>
-                            <option value={8}>8 Years</option>
-                            <option value={10}>10 Years</option>
-                            <option value={12}>12 Years</option>
-                        </select>
-                    </div>
-
-                    <div className="space-y-1.5">
-                        <label className="text-sm font-semibold text-slate-700">Collection Amount (৳)</label>
-                        <input 
-                            type="number" 
                             className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm"
-                            value={editForm.collection_amount || ''}
-                            onChange={e => setEditForm({...editForm, collection_amount: Number(e.target.value)})}
+                            value={editForm.customer_name || ''}
+                            onChange={e => setEditForm({...editForm, customer_name: e.target.value})}
                         />
-                        <p className="text-[10px] text-slate-500">Amounts &lt; 600 do not qualify for bonus.</p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1.5">
+                            <label className="text-sm font-semibold text-slate-700">Father/Husband Name</label>
+                            <input 
+                                type="text" 
+                                className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                                value={editForm.father_husband_name || ''}
+                                onChange={e => setEditForm({...editForm, father_husband_name: e.target.value})}
+                            />
+                        </div>
+                        <div className="space-y-1.5">
+                            <label className="text-sm font-semibold text-slate-700">Mobile</label>
+                            <input 
+                                type="text" 
+                                className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                                value={editForm.mobile || ''}
+                                onChange={e => setEditForm({...editForm, mobile: e.target.value})}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                         <div className="space-y-1.5">
+                            <label className="text-sm font-semibold text-slate-700">Gender</label>
+                            <select 
+                                className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-white"
+                                value={editForm.gender || 'MALE'}
+                                onChange={e => setEditForm({...editForm, gender: e.target.value as any})}
+                            >
+                                <option value="MALE">Male</option>
+                                <option value="FEMALE">Female</option>
+                                <option value="OTHER">Other</option>
+                            </select>
+                        </div>
+                        <div className="space-y-1.5">
+                            <label className="text-sm font-semibold text-slate-700">Date of Birth</label>
+                            <input 
+                                type="date" 
+                                className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                                value={editForm.dob || ''}
+                                onChange={e => setEditForm({...editForm, dob: e.target.value})}
+                            />
+                        </div>
                     </div>
 
                     <div className="space-y-1.5">
-                        <label className="text-sm font-semibold text-slate-700">Opened By</label>
-                         <select 
-                            className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-white"
-                            value={editForm.opened_by_employee_id || ''}
-                            onChange={e => setEditForm({...editForm, opened_by_employee_id: e.target.value})}
-                        >
-                            {employees.map(e => (
-                                <option key={e.id} value={e.id}>{e.name} ({e.id}) - {e.designation}</option>
-                            ))}
-                        </select>
+                        <label className="text-sm font-semibold text-slate-700">NID / Birth Cert</label>
+                        <input 
+                            type="text" 
+                            className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                            value={editForm.nid || ''}
+                            onChange={e => setEditForm({...editForm, nid: e.target.value})}
+                        />
+                    </div>
+
+                    <div className="space-y-1.5">
+                        <label className="text-sm font-semibold text-slate-700">Address</label>
+                        <textarea 
+                            className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                            rows={2}
+                            value={editForm.address || ''}
+                            onChange={e => setEditForm({...editForm, address: e.target.value})}
+                        />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1.5">
+                            <label className="text-sm font-semibold text-slate-700">Nominee Name</label>
+                            <input 
+                                type="text" 
+                                className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                                value={editForm.nominee_name || ''}
+                                onChange={e => setEditForm({...editForm, nominee_name: e.target.value})}
+                            />
+                        </div>
+                        <div className="space-y-1.5">
+                            <label className="text-sm font-semibold text-slate-700">Nominee Relation</label>
+                            <input 
+                                type="text" 
+                                className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                                value={editForm.nominee_relation || ''}
+                                onChange={e => setEditForm({...editForm, nominee_relation: e.target.value})}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                        <label className="text-sm font-semibold text-slate-700">Agent Name</label>
+                        <input 
+                            type="text" 
+                            className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                            value={editForm.agent_name || ''}
+                            onChange={e => setEditForm({...editForm, agent_name: e.target.value})}
+                        />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1.5">
+                            <label className="text-sm font-semibold text-slate-700">Term (Years)</label>
+                            <select 
+                                className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-white"
+                                value={editForm.term || 5}
+                                onChange={e => setEditForm({...editForm, term: Number(e.target.value)})}
+                            >
+                                <option value={1.5}>1.5 Years</option>
+                                <option value={3}>3 Years</option>
+                                <option value={5}>5 Years</option>
+                                <option value={8}>8 Years</option>
+                                <option value={10}>10 Years</option>
+                                <option value={12}>12 Years</option>
+                            </select>
+                        </div>
+                        <div className="space-y-1.5">
+                            <label className="text-sm font-semibold text-slate-700">Collection Amount (৳)</label>
+                            <input 
+                                type="number" 
+                                className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                                value={editForm.collection_amount || ''}
+                                onChange={e => setEditForm({...editForm, collection_amount: Number(e.target.value)})}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1.5">
+                            <label className="text-sm font-semibold text-slate-700">Opened By</label>
+                            <select 
+                                className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-white"
+                                value={editForm.opened_by_employee_id || ''}
+                                onChange={e => {
+                                    const newEmpId = e.target.value;
+                                    const selectedEmp = employees.find(emp => emp.id === newEmpId);
+                                    setEditForm({
+                                        ...editForm, 
+                                        opened_by_employee_id: newEmpId,
+                                        branch_id: selectedEmp ? selectedEmp.branch_id : editForm.branch_id
+                                    });
+                                }}
+                            >
+                                {employees.map(e => (
+                                    <option key={e.id} value={e.id}>{e.name} ({e.id}) - {e.designation}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div className="space-y-1.5">
+                            <label className="text-sm font-semibold text-slate-700">Branch</label>
+                            <select 
+                                className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-white"
+                                value={editForm.branch_id || ''}
+                                onChange={e => setEditForm({...editForm, branch_id: e.target.value})}
+                            >
+                                {branches.map(b => (
+                                    <option key={b.id} value={b.id}>{b.name}</option>
+                                ))}
+                            </select>
+                        </div>
                     </div>
                     
                     <div className="space-y-1.5">
@@ -552,6 +768,68 @@ const AccountReport: React.FC<AccountReportProps> = ({ accounts, employees, bran
                             value={editForm.opening_date || ''}
                             onChange={e => setEditForm({...editForm, opening_date: e.target.value})}
                         />
+                    </div>
+
+                    <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 space-y-3 mt-4">
+                        <h4 className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2">
+                            <AlertTriangle size={14} className="text-amber-500" />
+                            System Status (Advanced)
+                        </h4>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-1.5">
+                                <label className="text-sm font-semibold text-slate-700">Account Status</label>
+                                <select 
+                                    className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-white"
+                                    value={editForm.status || 'ACTIVE'}
+                                    onChange={e => setEditForm({...editForm, status: e.target.value as any})}
+                                >
+                                    <option value="ACTIVE">Active</option>
+                                    <option value="INACTIVE">Inactive</option>
+                                    <option value="PENDING">Pending</option>
+                                    <option value="ADJUSTED">Adjusted</option>
+                                </select>
+                            </div>
+
+                            <div className="flex items-center space-x-3 pt-6">
+                                <input 
+                                    type="checkbox" 
+                                    id="is_counted_check"
+                                    className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                                    checked={editForm.is_counted || false}
+                                    onChange={e => setEditForm({...editForm, is_counted: e.target.checked})}
+                                />
+                                <label htmlFor="is_counted_check" className="text-sm font-medium text-slate-700 cursor-pointer select-none">
+                                    Is Counted in Salary?
+                                </label>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4 pt-2">
+                             <div className="space-y-1.5">
+                                <label className="text-sm font-semibold text-slate-700">Counted Month</label>
+                                <input 
+                                    type="month" 
+                                    className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-white"
+                                    value={editForm.counted_month || ''}
+                                    onChange={e => setEditForm({...editForm, counted_month: e.target.value})}
+                                />
+                            </div>
+                            <div className="space-y-1.5">
+                                <label className="text-sm font-semibold text-slate-700">Salary Sheet ID</label>
+                                <input 
+                                    type="text" 
+                                    className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-white"
+                                    value={editForm.salary_sheet_id || ''}
+                                    onChange={e => setEditForm({...editForm, salary_sheet_id: e.target.value})}
+                                    placeholder="Optional"
+                                />
+                            </div>
+                        </div>
+
+                        <p className="text-[10px] text-slate-500 italic">
+                            Warning: Manually changing "Is Counted" may cause discrepancies in salary reports if not handled carefully. Only change if you know what you are doing.
+                        </p>
                     </div>
 
                     <div className="pt-2 flex space-x-3">

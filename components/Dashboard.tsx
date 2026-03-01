@@ -77,8 +77,9 @@ const Dashboard: React.FC<DashboardProps> = ({ branches, employees, activeRows, 
           const collectionTarget = target?.collectionTarget || 0;
           const accountTarget = target?.accountTarget || 0;
 
+          // Filter by collectionDate instead of createdAt
           const collected = centerRecords
-            .filter(r => r.employeeId === emp.id && r.createdAt.startsWith(month))
+            .filter(r => r.employeeId === emp.id && r.collectionDate.startsWith(month))
             .reduce((sum, r) => sum + r.amount, 0);
 
           const accountsOpened = accounts
@@ -174,9 +175,18 @@ const Dashboard: React.FC<DashboardProps> = ({ branches, employees, activeRows, 
     const monthlyAccounts = accounts.filter(a => a.opening_date.startsWith(month));
     const newAccountsCount = monthlyAccounts.length;
     
-    // activeRows contains the calculated salary data for the current month if generated
+    // LIVE COLLECTION CALCULATION:
+    // Filter records for the selected month (using collectionDate) and visible branches
+    const monthlyRecords = centerRecords.filter(r => 
+        r.collectionDate.startsWith(month) && 
+        branches.some(b => b.id === r.branchId)
+    );
+    
+    // Sum from raw database records (Live Data) instead of calculated salary sheets
+    const totalCollection = monthlyRecords.reduce((sum, r) => sum + r.amount, 0);
+
+    // Total Salary (Payout) still relies on generated sheets as it involves complex logic
     const totalSalary = activeRows.reduce((sum, row) => sum + row.final_salary, 0);
-    const totalCollection = activeRows.reduce((sum, row) => sum + row.total_collection, 0);
 
     // Chart Data: Salary by Branch
     const salaryByBranch: Record<string, number> = {};
@@ -224,23 +234,73 @@ const Dashboard: React.FC<DashboardProps> = ({ branches, employees, activeRows, 
         topAccountOpeners,
         bonusStats
     };
-  }, [employees, branches, accounts, activeRows, month]);
+  }, [employees, branches, accounts, activeRows, month, centerRecords]);
 
-  // 6. Ranked Employees
+  // 6. Ranked Employees (LIVE CALCULATION)
   const rankedEmployees = useMemo(() => {
-    return [...activeRows]
-        .sort((a, b) => b.total_collection - a.total_collection)
+    // ALWAYS use Live Data for the Performance Table to ensure instant feedback
+    // This aggregates centerRecords (collection) and accounts (books) manually.
+    
+    const rankings: Record<string, { name: string, branch: string, amount: number, totalBooks: number, bonusableBooks: number }> = {};
+    
+    // Helper to init user in rankings map
+    const ensureUser = (empId: string) => {
+        const id = String(empId).trim();
+        if (!rankings[id]) {
+            const emp = employees.find(e => e.id === id);
+            const br = branches.find(b => b.id === emp?.branch_id);
+            if (emp) {
+                rankings[id] = { 
+                    name: emp.name, 
+                    branch: br ? br.name : 'Unknown Branch', 
+                    amount: 0,
+                    totalBooks: 0,
+                    bonusableBooks: 0
+                };
+            }
+        }
+        return id;
+    };
+
+    // 1. Process Collections (Live) using collectionDate
+    centerRecords.filter(r => r.collectionDate.startsWith(month)).forEach(r => {
+        const id = ensureUser(r.employeeId);
+        if (rankings[id]) {
+            rankings[id].amount += r.amount;
+        }
+    });
+
+    // 2. Process Books (Live)
+    accounts.filter(a => a.opening_date.startsWith(month)).forEach(acc => {
+        const id = ensureUser(acc.opened_by_employee_id);
+        if (rankings[id]) {
+            rankings[id].totalBooks += 1;
+            // Live eligibility check
+            if (acc.collection_amount >= 600) {
+                rankings[id].bonusableBooks += 1;
+            }
+        }
+    });
+
+    // Convert to array and sort
+    return Object.entries(rankings)
+        .sort(([, a], [, b]) => {
+            // Sort by Collection Amount, then Book Count
+            if (b.amount !== a.amount) return b.amount - a.amount;
+            return b.totalBooks - a.totalBooks;
+        })
         .slice(0, 10)
-        .map(row => ({
-            id: row.employee.id,
-            name: row.employee.name,
-            code: row.employee.id,
-            branchName: row.branch.name,
-            totalCollection: row.total_collection,
-            bonusableBooks: row.total_books - row.book_no_bonus,
-            totalBooks: row.total_books
+        .map(([id, data]) => ({
+            id,
+            name: data.name,
+            code: id,
+            branchName: data.branch,
+            totalCollection: data.amount,
+            bonusableBooks: data.bonusableBooks,
+            totalBooks: data.totalBooks
         }));
-  }, [activeRows]);
+
+  }, [centerRecords, accounts, month, employees, branches]);
 
 
   // --- ROLE BASED VIEWS ---

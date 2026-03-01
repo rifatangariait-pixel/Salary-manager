@@ -16,8 +16,6 @@ const CenterReport: React.FC<CenterReportProps> = ({ records, branches, employee
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>('all');
 
   // "Hydrate" records to reflect current master data (handles moved centers)
-  // This fixes the issue where a center moved to a new branch (e.g. Madaripur -> Chilarchar)
-  // would hide historical records created under the old branch.
   const effectiveRecords = useMemo(() => {
       return records.map(r => {
           // 1. Try strict match first
@@ -25,12 +23,9 @@ const CenterReport: React.FC<CenterReportProps> = ({ records, branches, employee
           if (strictMatch) return r;
 
           // 2. If strict match fails, check if this center code is unique in the system
-          // If so, assume the record belongs to the current definition of the center
           const matches = centers.filter(c => c.centerCode === r.centerCode);
           if (matches.length === 1) {
               const master = matches[0];
-              // Return a new object with updated branchId matching the master
-              // We also align the type just in case
               const resolvedType: 'OWN' | 'OFFICE' = master.type === 'OFFICE' ? 'OFFICE' : (master.assignedEmployeeId === r.employeeId ? 'OWN' : 'OFFICE');
               return { 
                   ...r, 
@@ -43,15 +38,14 @@ const CenterReport: React.FC<CenterReportProps> = ({ records, branches, employee
       });
   }, [records, centers]);
 
-  // Filter Logic
+  // Filter Logic - USING COLLECTION DATE
   const filteredRecords = useMemo(() => {
-    return effectiveRecords.filter(r => {
-      // 1. Month Check
-      if (!r.createdAt.startsWith(selectedMonth)) return false;
+    const filtered = effectiveRecords.filter(r => {
+      // 1. Month Check (Business Logic: Collection Date)
+      if (!r.collectionDate.startsWith(selectedMonth)) return false;
 
       // 2. Visibility Check (Security)
       if (!branches.some(b => b.id === r.branchId)) return false;
-      // Note: We don't strictly check employee visibility here as effectiveRecords might map to any emp
       
       // 3. User Selection Filters
       if (selectedBranchId !== 'all' && r.branchId !== selectedBranchId) return false;
@@ -59,6 +53,8 @@ const CenterReport: React.FC<CenterReportProps> = ({ records, branches, employee
 
       return true;
     });
+    console.log(`[CenterReport] Total records shown: ${filtered.length}`);
+    return filtered;
   }, [effectiveRecords, selectedMonth, selectedBranchId, selectedEmployeeId, branches]);
 
   // Aggregation: Group by Center + Employee
@@ -79,11 +75,9 @@ const CenterReport: React.FC<CenterReportProps> = ({ records, branches, employee
       const center = centers.find(c => c.centerCode === r.centerCode && c.branchId === r.branchId);
       
       if (center) {
-          // If explicit OFFICE type is set in management, force OFFICE
           if (center.type === 'OFFICE') {
               effectiveType = 'OFFICE';
           } else {
-              // Otherwise check ownership: If collector matches assigned owner -> OWN, else OFFICE
               effectiveType = center.assignedEmployeeId === r.employeeId ? 'OWN' : 'OFFICE';
           }
       }
@@ -104,11 +98,12 @@ const CenterReport: React.FC<CenterReportProps> = ({ records, branches, employee
       groups[key].totalAmount += r.amount;
     });
 
-    // Sort by Center Code (asc), then Total Amount (desc)
-    return Object.values(groups).sort((a, b) => {
+    const result = Object.values(groups).sort((a, b) => {
       if (a.centerCode !== b.centerCode) return a.centerCode - b.centerCode;
       return b.totalAmount - a.totalAmount;
     });
+    console.log(`[CenterReport] Aggregated rows shown: ${result.length}`);
+    return result;
   }, [filteredRecords, centers]);
 
   // Summary Stats
@@ -158,13 +153,11 @@ const CenterReport: React.FC<CenterReportProps> = ({ records, branches, employee
   // Helpers
   const getEmployeeName = (id: string) => employees.find(e => e.id === id)?.name || 'Unknown';
   
-  // Find center Name helper
   const getCenterName = (code: number, branchId: string) => {
       const center = centers.find(c => c.centerCode === code && c.branchId === branchId);
       return center ? center.centerName : '';
   };
 
-  // Dropdown Options
   const visibleEmployees = useMemo(() => {
     if (selectedBranchId === 'all') return employees;
     return employees.filter(e => e.branch_id === selectedBranchId);
@@ -179,7 +172,7 @@ const CenterReport: React.FC<CenterReportProps> = ({ records, branches, employee
            <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4 w-full">
               <div>
                  <label className="text-xs font-bold text-slate-500 uppercase mb-1 flex items-center gap-1">
-                    <Calendar size={14} /> Month
+                    <Calendar size={14} /> Collection Month
                  </label>
                  <input 
                     type="month" 

@@ -12,8 +12,8 @@ interface SalarySlipProps {
 
 const SalarySlip: React.FC<SalarySlipProps> = ({ row, month, accounts, commissionRates }) => {
   // --- DYNAMIC COMMISSION RATES ---
-  // Default to Type A if missing
-  const commType = row.employee.commission_type || 'A';
+  // Fix: Use row.commission_type if available (overridden), otherwise fallback to employee default
+  const commType = row.commission_type || row.employee.commission_type || 'A';
   const rates = commissionRates[commType] || { own: 0, office: 0 };
   
   const OWN_RATE = rates.own;
@@ -24,23 +24,39 @@ const SalarySlip: React.FC<SalarySlipProps> = ({ row, month, accounts, commissio
   const ownComm = row.own_somity_collection * (OWN_RATE / 100);
   const officeComm = row.office_somity_collection * (OFFICE_RATE / 100);
   
-  // Book Commission Total for breakdown
-  const bookCommission = 
+  // Calculate Bonusable Books count directly from the ROW (Source of Truth for Salary)
+  const totalBonusableBooks = 
+    Number(row.book_1_5 || 0) +
+    Number(row.book_3 || 0) +
+    Number(row.book_5 || 0) +
+    Number(row.book_8 || 0) +
+    Number(row.book_10 || 0) +
+    Number(row.book_12 || 0);
+
+  // Book Commission Total for breakdown (Updated logic)
+  const bookCommissionGross = 
     (row.book_1_5 * bonusRates[1.5]) +
     (row.book_3 * bonusRates[3]) +
     (row.book_5 * bonusRates[5]) +
     (row.book_8 * bonusRates[8]) +
     (row.book_10 * bonusRates[10]) +
     (row.book_12 * bonusRates[12]);
+  
+  // Updated: Deduction based on bonusable books count only
+  const bookDeduction = totalBonusableBooks * 60;
+  const bookCommission = bookCommissionGross - bookDeduction;
 
   // Total Earnings Calculation (Including new incentive)
   const totalEarnings = (row.basic_salary || 0) + row.commission + row.bonus + (row.manager_convenience || 0);
 
-  // Filter accounts for this slip
-  // Logic: Must be counted in this month AND bonusable (collection >= 600)
+  // Filter accounts for this slip (Only used for the detail list at the bottom)
   const bonusableAccounts = useMemo(() => {
+    // Helper to normalize ID for comparison (Trim whitespace, lowercase)
+    const normalize = (s: string | undefined) => String(s || '').trim().toLowerCase();
+    const targetEmpId = normalize(row.employee.id);
+
     return accounts.filter(acc => 
-      acc.opened_by_employee_id === row.employee.id && 
+      normalize(acc.opened_by_employee_id) === targetEmpId && 
       acc.counted_month === month && 
       acc.collection_amount >= 600
     );
@@ -48,7 +64,11 @@ const SalarySlip: React.FC<SalarySlipProps> = ({ row, month, accounts, commissio
 
   // Format Account List Display
   const accountListDisplay = useMemo(() => {
-    if (bonusableAccounts.length === 0) return 'None';
+    if (bonusableAccounts.length === 0) {
+        // If row has counts but list is empty, show generic message
+        if (totalBonusableBooks > 0) return `${totalBonusableBooks} books accounted (Details not linked / Manual Entry)`;
+        return 'None';
+    }
     
     // Logic: Show compact string
     const displayLimit = 12;
@@ -58,7 +78,7 @@ const SalarySlip: React.FC<SalarySlipProps> = ({ row, month, accounts, commissio
     const listStr = itemsToShow.map(acc => `${acc.account_code} (${acc.term}y)`).join(', ');
     
     return remaining > 0 ? `${listStr} +${remaining} more` : listStr;
-  }, [bonusableAccounts]);
+  }, [bonusableAccounts, totalBonusableBooks]);
 
   // Helper to format currency
   const fmt = (num: number) => num?.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -71,14 +91,21 @@ const SalarySlip: React.FC<SalarySlipProps> = ({ row, month, accounts, commissio
   // Format Month
   const monthName = new Date(month).toLocaleString('default', { month: 'long', year: 'numeric' });
 
+  // Member count logic (fallback to 0 if not present for old data)
+  const ownMembers = row.own_somity_member_count || 0;
+  const officeMembers = row.office_somity_member_count || 0;
+  const totalMembers = ownMembers + officeMembers;
+  const totalCenters = (row.own_somity_count || 0) + (row.office_somity_count || 0);
+
   return (
     <div 
-      className="bg-white text-slate-900 font-sans mx-auto relative flex flex-col" 
+      className="bg-white text-slate-900 font-sans mx-auto flex flex-col" 
       style={{ 
         width: '210mm', 
-        height: '297mm', 
+        minHeight: '297mm', // Changed from height to minHeight for better overflow handling
         padding: '12mm',
-        boxSizing: 'border-box'
+        boxSizing: 'border-box',
+        position: 'relative'
       }}
     >
         {/* HEADER */}
@@ -93,7 +120,7 @@ const SalarySlip: React.FC<SalarySlipProps> = ({ row, month, accounts, commissio
         </div>
 
         {/* EMPLOYEE INFO CARD */}
-        <div className="border border-slate-300 rounded-lg p-4 mb-6 bg-slate-50/50">
+        <div className="border border-slate-300 rounded-lg p-4 mb-4 bg-slate-50/50">
             <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
                 <div className="flex justify-between border-b border-slate-200 pb-1">
                     <span className="text-slate-500 font-medium">Employee Name</span>
@@ -117,7 +144,38 @@ const SalarySlip: React.FC<SalarySlipProps> = ({ row, month, accounts, commissio
                 </div>
                 <div className="flex justify-between border-b border-slate-200 pb-1">
                     <span className="text-slate-500 font-medium">Bonusable Books</span>
-                    <span className="font-semibold text-slate-800">{bonusableAccounts.length} (Current Month)</span>
+                    <span className="font-semibold text-slate-800">{totalBonusableBooks} (Current Month)</span>
+                </div>
+            </div>
+        </div>
+
+        {/* COLLECTION SUMMARY (Current Month) */}
+        <div className="border border-slate-300 rounded-lg p-4 mb-6 bg-blue-50/30">
+            <h3 className="text-xs font-bold text-slate-600 uppercase mb-3 border-b border-slate-200 pb-1 tracking-wider">
+                COLLECTION SUMMARY (Current Month)
+            </h3>
+            <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
+                <div className="flex justify-between border-b border-slate-200 pb-1">
+                    <span className="text-slate-500 font-medium">
+                        Own Somity Deposit <span className="text-xs text-slate-500 font-bold ml-1">({row.own_somity_count || 0} centers / {ownMembers} members)</span>
+                    </span>
+                    <span className="font-bold text-slate-800">{fmt(row.own_somity_collection)}</span>
+                </div>
+                <div className="flex justify-between border-b border-slate-200 pb-1">
+                    <span className="text-slate-500 font-medium">
+                        Office Somity Deposit <span className="text-xs text-slate-500 font-bold ml-1">({row.office_somity_count || 0} centers / {officeMembers} members)</span>
+                    </span>
+                    <span className="font-bold text-slate-800">{fmt(row.office_somity_collection)}</span>
+                </div>
+                <div className="flex justify-between border-b border-slate-200 pb-1">
+                    <span className="text-slate-700 font-bold">
+                        Total Deposit Collection <span className="text-xs text-slate-500 font-normal ml-1">({totalCenters} centers / {totalMembers} members)</span>
+                    </span>
+                    <span className="font-bold text-blue-700">{fmt(row.own_somity_collection + row.office_somity_collection)}</span>
+                </div>
+                <div className="flex justify-between border-b border-slate-200 pb-1">
+                    <span className="text-slate-700 font-bold">Total Loan Collection</span>
+                    <span className="font-bold text-purple-700">{fmt(row.total_loan_collection)}</span>
                 </div>
             </div>
         </div>
@@ -146,7 +204,12 @@ const SalarySlip: React.FC<SalarySlipProps> = ({ row, month, accounts, commissio
                         <td className="border border-slate-200 px-3 py-2 text-right font-medium">{fmt(officeComm)}</td>
                     </tr>
                     <tr>
-                        <td className="border border-slate-200 px-3 py-2">Book Sales Commission</td>
+                        <td className="border border-slate-200 px-3 py-2">
+                            Book Sales Commission 
+                            <span className="text-[10px] text-slate-400 ml-1">
+                                (Gross: {fmt(bookCommissionGross)} - Deduction: {fmt(bookDeduction)})
+                            </span>
+                        </td>
                         <td className="border border-slate-200 px-3 py-2 text-right font-medium">{fmt(bookCommission)}</td>
                     </tr>
                     {row.bonus > 0 && (
@@ -227,20 +290,22 @@ const SalarySlip: React.FC<SalarySlipProps> = ({ row, month, accounts, commissio
         </div>
 
         {/* BONUS ACCOUNTS SUMMARY */}
-         {bonusableAccounts.length > 0 && (
+         {(totalBonusableBooks > 0 || bonusableAccounts.length > 0) && (
             <div className="mb-6 px-1">
-                <p className="text-[10px] font-bold uppercase text-slate-500 mb-1">Bonusable Accounts ({bonusableAccounts.length})</p>
+                <p className="text-[10px] font-bold uppercase text-slate-500 mb-1">
+                    Bonusable Accounts ({bonusableAccounts.length > 0 ? bonusableAccounts.length : totalBonusableBooks})
+                </p>
                 <p className="text-xs font-mono text-slate-600 leading-relaxed bg-slate-50 p-2 border border-slate-200 rounded">
                     {accountListDisplay}
                 </p>
             </div>
          )}
 
-         {/* SPACER */}
+         {/* SPACER FOR PRINT ALIGNMENT */}
          <div className="flex-grow"></div>
 
          {/* SIGNATURE SECTION */}
-         <div className="grid grid-cols-4 gap-4 mt-8 mb-4">
+         <div className="grid grid-cols-4 gap-4 mt-12 mb-8">
             {['Prepared By', 'Checked By', 'Approved By', 'Receiver'].map((title) => (
                 <div key={title} className="text-center">
                     <div className="h-16"></div>
@@ -250,11 +315,13 @@ const SalarySlip: React.FC<SalarySlipProps> = ({ row, month, accounts, commissio
             ))}
          </div>
 
-         {/* FOOTER */}
-         <div className="border-t border-slate-200 pt-2 flex justify-between items-center text-[9px] text-slate-400">
-            <span>This Sheet is generated By Team IT</span>
-            <span>{new Date().toLocaleString()}</span>
-            <span>Page 1 of 1</span>
+         {/* FOOTER CONTAINER */}
+         <div className="mt-auto w-full">
+             <div className="border-t border-slate-200 pt-2 flex justify-between items-center text-[10px] text-slate-500 font-medium tracking-wide">
+                <span className="text-left">Created by IT Team</span>
+                <span className="text-center">Print Date & Time: {new Date().toLocaleString()}</span>
+                <span className="text-right">Thanks from Divix</span>
+             </div>
          </div>
 
     </div>

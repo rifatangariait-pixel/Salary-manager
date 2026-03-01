@@ -34,12 +34,22 @@ export const validateAccountRow = (
 
   // 1. Account Code
   const code = String(row.accountCode).trim();
+  const empId = String(row.employeeId).trim();
+  const emp = employees.find(e => e.id.toLowerCase() === empId.toLowerCase());
+
   if (!code) {
     errors.accountCode = "Required";
   } else {
-    // Check system duplicates
-    if (existingAccounts.some(a => a.account_code.toLowerCase() === code.toLowerCase())) {
-        errors.accountCode = "Exists in system";
+    // Check system duplicates (Scoped to Branch)
+    if (emp) {
+        if (existingAccounts.some(a => a.account_code.toLowerCase() === code.toLowerCase() && a.branch_id === emp.branch_id)) {
+            errors.accountCode = "Exists in branch";
+        }
+    } else {
+        // Fallback to global check if employee not found (though employee check will fail later)
+        if (existingAccounts.some(a => a.account_code.toLowerCase() === code.toLowerCase())) {
+             errors.accountCode = "Exists in system (Global Check)";
+        }
     }
     // Check batch duplicates (The caller handles excluding 'self' if checking the whole set, or we assume batch check is external)
     // Here we assume the caller handles batch duplicate marking or passes relevant info.
@@ -74,11 +84,9 @@ export const validateAccountRow = (
   }
 
   // 5. Employee ID
-  const empId = String(row.employeeId).trim();
   if (!empId) {
       errors.employeeId = "Required";
   } else {
-      const emp = employees.find(e => e.id.toLowerCase() === empId.toLowerCase());
       if (!emp) {
           errors.employeeId = "Not Found";
       } else if (emp.status !== 'ACTIVE') {
@@ -248,6 +256,7 @@ export const parseCentersCSV = (
   const idxBranch = headers.findIndex(h => h.includes('branch'));
   const idxEmp = headers.findIndex(h => h.includes('employee_code') || h.includes('field_officer') || h.includes('employee'));
   const idxType = headers.findIndex(h => h.includes('type'));
+  const idxMembers = headers.findIndex(h => h.includes('member_count') || h.includes('members'));
 
   if (idxCode === -1 || idxName === -1 || idxBranch === -1 || idxEmp === -1) {
     return {
@@ -278,6 +287,12 @@ export const parseCentersCSV = (
         if (t === 'OWN' || t === 'OFFICE') {
             typeVal = t;
         }
+    }
+
+    let memberCount = 0;
+    if (idxMembers !== -1 && cols[idxMembers]) {
+        const mc = parseInt(cols[idxMembers]);
+        if (!isNaN(mc) && mc > 0) memberCount = mc;
     }
 
     if (!codeStr || !name || !branchName || !empCode) {
@@ -329,7 +344,8 @@ export const parseCentersCSV = (
         centerName: name,
         branchId: branch.id,
         assignedEmployeeId: employee.id,
-        type: typeVal
+        type: typeVal,
+        memberCount
     });
   }
 

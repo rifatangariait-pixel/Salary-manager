@@ -21,26 +21,19 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     setLoading(true);
 
     try {
-        // Strict Authentication: Fetch Users from Service
+        // Attempt to fetch from Google Sheets
         const users = await googleSheetService.getUsers();
-        
-        if (users.length === 0) {
-             setError("Database is empty or connection failed. Please ensure SystemUsers sheet is populated.");
-             setLoading(false);
-             return;
-        }
 
         const user = users.find(u => u.username === username);
         
-        // Simple password check (In production, use hashing)
         if (user && user.password === password) {
             onLogin(user);
         } else {
             setError('Invalid username or password.');
         }
-    } catch (err) {
+    } catch (err: any) {
         console.error(err);
-        setError("Connection Error: Unable to reach Google Sheets database.");
+        setError(`Connection failed: ${err.message || "Check internet or credentials."}`);
     } finally {
         setLoading(false);
     }

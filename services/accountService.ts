@@ -16,9 +16,13 @@ export function validateAccount(
   const normalizedCode = code.trim().toLowerCase();
   
   // Case-insensitive search in the provided list (live data)
-  const ac = allAccounts.find(a => a.account_code.toLowerCase() === normalizedCode);
+  // SCOPED TO BRANCH: Now matching both Code AND Branch ID
+  const ac = allAccounts.find(a => 
+    a.account_code.toLowerCase() === normalizedCode && 
+    a.branch_id === branchId
+  );
 
-  if (!ac) return { ok: false, error: "Account not found" };
+  if (!ac) return { ok: false, error: "Account not found in this branch" };
   
   // Verify ownership
   if (ac.opened_by_employee_id !== employeeId)

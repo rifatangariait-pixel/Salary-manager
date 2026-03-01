@@ -25,8 +25,10 @@ export const createEmptyEntry = (
 
     own_somity_count: 0,
     own_somity_collection: 0,
+    own_somity_member_count: 0, // NEW
     office_somity_count: 0,
     office_somity_collection: 0,
+    office_somity_member_count: 0, // NEW
     
     // Initialize Center fields
     center_count: 0,
@@ -90,6 +92,14 @@ export const recalculateEntry = (
     entry.book_12 + 
     entry.book_no_bonus;
 
+  const total_bonusable_books = 
+    entry.book_1_5 + 
+    entry.book_3 + 
+    entry.book_5 + 
+    entry.book_8 + 
+    entry.book_10 + 
+    entry.book_12;
+
   // Update Total Collection to include Center Collection
   const total_collection = 
     (entry.own_somity_collection || 0) + 
@@ -107,7 +117,7 @@ export const recalculateEntry = (
     ((entry.office_somity_collection || 0) * officeRate);
     // Note: Center collection is currently not generating commission based on instructions, only added to totals.
 
-  const bookCommission = 
+  const bookCommissionGross = 
     (entry.book_1_5 * bonusRates[1.5]) +
     (entry.book_3 * bonusRates[3]) +
     (entry.book_5 * bonusRates[5]) +
@@ -115,6 +125,11 @@ export const recalculateEntry = (
     (entry.book_10 * bonusRates[10]) +
     (entry.book_12 * bonusRates[12]);
     // book_no_bonus does not generate commission
+
+  // New Logic: Deduct (all Bonusable book count * 60)
+  const bookDeduction = total_bonusable_books * 60;
+  
+  const bookCommission = bookCommissionGross - bookDeduction;
 
   const commission = collectionCommission + bookCommission;
   

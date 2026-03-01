@@ -1,590 +1,742 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Employee, AccountOpening, User } from '../types';
-import { Save, FilePlus, Upload, FileSpreadsheet, AlertCircle, CheckCircle, X, Download, AlertTriangle, Trash2, Edit2, ListChecks } from 'lucide-react';
+import { Employee, AccountOpening, User, Center, Branch } from '../types';
+import { Save, FilePlus, Upload, FileSpreadsheet, AlertCircle, CheckCircle, X, Download, Trash2, Edit2, ListChecks, User as UserIcon, Calendar, MapPin, Hash, Phone, Users, Loader2, UploadCloud, RefreshCw } from 'lucide-react';
 import { validateAccountRow } from '../services/importService';
 import * as XLSX from 'xlsx';
 
 interface AddAccountFormProps {
   employees: Employee[];
   existingAccounts: AccountOpening[];
+  centers: Center[];
+  branches: Branch[];
   onSave: (account: Omit<AccountOpening, 'id'>) => void;
-  onBulkSave: (accounts: Omit<AccountOpening, 'id'>[]) => void;
+  onBulkSave: (accounts: Omit<AccountOpening, 'id'>[]) => Promise<void>;
+  onAddCenter: (center: Omit<Center, 'id'>) => Promise<void>;
   currentUser: User;
 }
 
-interface EditableRow {
-  id: string;
-  data: {
-    accountCode: string;
-    amount: string;
-    term: string;
-    date: string;
-    employeeId: string;
-  };
-  errors: Record<string, string>;
-  warning: string;
-  isValid: boolean;
-}
+// Initial state for form fields
+const INITIAL_FORM_STATE = {
+    account_code: '',
+    center_code: '' as unknown as number,
+    branch_id: '',
+    opening_date: new Date().toISOString().slice(0, 10),
+    term: 5,
+    collection_amount: '' as unknown as number,
+    opened_by_employee_id: '',
+    customer_name: '',
+    father_husband_name: '',
+    gender: 'MALE' as const,
+    dob: '',
+    nid: '',
+    mobile: '',
+    address: '',
+    nominee_name: '',
+    nominee_relation: '',
+    agent_name: ''
+};
 
-const AddAccountForm: React.FC<AddAccountFormProps> = ({ employees, existingAccounts, onSave, onBulkSave, currentUser }) => {
+const AddAccountForm: React.FC<AddAccountFormProps> = ({ employees, existingAccounts, centers, branches, onSave, onBulkSave, onAddCenter, currentUser }) => {
   const [mode, setMode] = useState<'SINGLE' | 'BULK'>('SINGLE');
   const isNormalUser = currentUser.role === 'USER';
+  const [branchFilter, setBranchFilter] = useState<string>('');
 
-  // Single Form State
-  const [accountCode, setAccountCode] = useState('');
-  const [term, setTerm] = useState(5);
-  const [collectionAmount, setCollectionAmount] = useState<number | ''>('');
-  const [employeeId, setEmployeeId] = useState('');
-  const [openingDate, setOpeningDate] = useState(new Date().toISOString().slice(0, 10));
-
-  // Draft State for Manual Mode
-  const [manualDrafts, setManualDrafts] = useState<EditableRow[]>([]);
+  // Form State
+  const [formData, setFormData] = useState(INITIAL_FORM_STATE);
+  const [drafts, setDrafts] = useState<Omit<AccountOpening, 'id'>[]>([]);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Bulk Form State
-  const [bulkRows, setBulkRows] = useState<EditableRow[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
 
-  // Initialize employee ID based on user role
+  // Filter employees based on branch filter
+  const filteredEmployees = useMemo(() => {
+      if (!branchFilter) return employees;
+      return employees.filter(e => e.branch_id === branchFilter);
+  }, [employees, branchFilter]);
+
+  // Initialize employee ID & Branch based on user role
   useEffect(() => {
     if (isNormalUser && currentUser.employee_id) {
-        setEmployeeId(currentUser.employee_id);
-    } else if (employees.length > 0) {
-        setEmployeeId(employees[0].id);
+        const emp = employees.find(e => e.id === currentUser.employee_id);
+        setFormData(prev => ({
+            ...prev,
+            opened_by_employee_id: currentUser.employee_id || '',
+            branch_id: emp?.branch_id || ''
+        }));
+    } else if (employees.length > 0 && !formData.opened_by_employee_id) {
+        // Default to first employee and their branch
+        setFormData(prev => ({
+            ...prev,
+            opened_by_employee_id: employees[0].id,
+            branch_id: employees[0].branch_id
+        }));
     }
   }, [employees, isNormalUser, currentUser]);
 
-  // --- VALIDATION LOGIC ---
-  const validateRows = (rows: EditableRow[], drafts: EditableRow[] = []) => {
-      // Collect all codes to check duplicates
-      // Combine current rows with existing accounts AND other drafts if checking against them
-      // Here we validate the `rows` passed against the system + themselves.
+  // Update selected employee when filter changes
+  useEffect(() => {
+      if (!isNormalUser && branchFilter && filteredEmployees.length > 0) {
+          const currentEmp = filteredEmployees.find(e => e.id === formData.opened_by_employee_id);
+          if (!currentEmp) {
+              const firstEmp = filteredEmployees[0];
+              setFormData(prev => ({
+                  ...prev,
+                  opened_by_employee_id: firstEmp.id,
+                  branch_id: firstEmp.branch_id,
+                  center_code: '' as unknown as number
+              }));
+          }
+      }
+  }, [branchFilter, filteredEmployees, isNormalUser]);
+
+  // Derived Data
+  const availableCenters = useMemo(() => {
+      if (!formData.branch_id) return [];
+      return centers.filter(c => c.branchId === formData.branch_id);
+  }, [formData.branch_id, centers]);
+
+  const selectedCenterDetails = useMemo(() => {
+      const code = Number(formData.center_code);
+      return availableCenters.find(c => c.centerCode === code);
+  }, [formData.center_code, availableCenters]);
+
+  const selectedBranchName = useMemo(() => {
+      const b = branches.find(b => b.id === formData.branch_id);
+      return b ? b.name : 'Unknown Branch';
+  }, [formData.branch_id, branches]);
+
+  // Handlers
+  const handleInputChange = (field: keyof typeof INITIAL_FORM_STATE, value: any) => {
+      setFormData(prev => ({ ...prev, [field]: value }));
       
-      const batchCodes = rows.map(r => r.data.accountCode.toLowerCase().trim()).filter(Boolean);
-      const duplicateBatchCodes = batchCodes.filter((item, index) => batchCodes.indexOf(item) !== index);
-
-      return rows.map(row => {
-          const result = validateAccountRow(
-              {
-                  accountCode: row.data.accountCode,
-                  amount: row.data.amount,
-                  term: row.data.term,
-                  date: row.data.date,
-                  employeeId: row.data.employeeId
-              },
-              existingAccounts,
-              employees,
-              new Set()
-          );
-
-          // Add batch duplicate error
-          if (duplicateBatchCodes.includes(row.data.accountCode.toLowerCase().trim())) {
-              result.isValid = false;
-              result.errors.accountCode = "Duplicate in this batch";
+      // Auto-update branch if employee changes (for admins)
+      if (field === 'opened_by_employee_id') {
+          const emp = employees.find(e => e.id === value);
+          if (emp) {
+              setFormData(prev => ({ ...prev, branch_id: emp.branch_id, center_code: '' as unknown as number }));
           }
-          
-          // Check duplicates against OTHER drafts if applicable
-          const isDuplicateInOther = drafts.some(d => d.id !== row.id && d.data.accountCode.toLowerCase() === row.data.accountCode.toLowerCase());
-          if (isDuplicateInOther) {
-              result.isValid = false;
-              result.errors.accountCode = "Duplicate in draft list";
-          }
-
-          return {
-              ...row,
-              errors: result.errors,
-              warning: result.warning || '',
-              isValid: result.isValid
-          };
-      });
+      }
   };
 
-  // --- MANUAL MODE HANDLERS ---
+  const validateAndPrepareAccount = () => {
+      console.log("Validating form data:", formData);
+      // Validation
+      if (!formData.account_code) { alert("Account Code is required."); return null; }
+      if (!formData.center_code) { alert("Center Code is mandatory."); return null; }
+      if (!formData.customer_name) { alert("Customer Name is required."); return null; }
+      
+      // Allow 0 if it's a valid number, but check for empty string
+      if (String(formData.collection_amount) === '' || Number(formData.collection_amount) < 0) { 
+          alert("Invalid Collection Amount."); 
+          return null; 
+      }
+
+      // Check Duplicates (Scoped to Branch)
+      const isDuplicateInSystem = existingAccounts.some(a => 
+          a.account_code.toLowerCase() === formData.account_code.toLowerCase() && 
+          a.branch_id === formData.branch_id
+      );
+      
+      if (isDuplicateInSystem) {
+          alert(`Account Code '${formData.account_code}' already exists in this branch.`);
+          return null;
+      }
+
+      const isDuplicateInDraft = drafts.some(d => 
+          d.account_code.toLowerCase() === formData.account_code.toLowerCase() && 
+          d.branch_id === formData.branch_id
+      );
+
+      if (isDuplicateInDraft) {
+          alert(`Account Code '${formData.account_code}' is already in your draft list for this branch.`);
+          return null;
+      }
+
+      const newEntry: Omit<AccountOpening, 'id'> = {
+          ...formData,
+          // Ensure numbers are numbers
+          center_code: Number(formData.center_code),
+          term: Number(formData.term),
+          collection_amount: Number(formData.collection_amount),
+          is_counted: false,
+          counted_month: null,
+          salary_sheet_id: null
+      };
+      
+      console.log("Validation successful, new entry:", newEntry);
+      return newEntry;
+  };
+
+  const resetFormPartial = () => {
+      setFormData(prev => ({
+          ...prev,
+          account_code: '',
+          collection_amount: '' as unknown as number,
+          customer_name: '',
+          father_husband_name: '',
+          dob: '',
+          nid: '',
+          mobile: '',
+          address: '',
+          nominee_name: '',
+          nominee_relation: ''
+      }));
+  };
 
   const handleAddToDraft = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!accountCode || !collectionAmount || !employeeId) return;
-
-    const newDraft: EditableRow = {
-        id: Math.random().toString(36).substr(2, 9),
-        data: {
-            accountCode: accountCode.trim(),
-            amount: String(collectionAmount),
-            term: String(term),
-            date: openingDate,
-            employeeId: employeeId
-        },
-        errors: {},
-        warning: '',
-        isValid: true
-    };
-
-    // Validate strictly before adding, but allow adding with errors to fix later if needed?
-    // User requested "Draft entry" - implying temporary state. We will add it and then validate.
-    const updatedDrafts = [...manualDrafts, newDraft];
-    const validated = validateRows(updatedDrafts, []); // Validate whole batch against itself
-    setManualDrafts(validated);
-
-    // Reset Form (keep date/emp for speed)
-    setAccountCode('');
-    setCollectionAmount('');
-  };
-
-  const handleManualCellChange = (id: string, field: keyof EditableRow['data'], value: string) => {
-      setManualDrafts(prev => {
-          const updated = prev.map(r => r.id === id ? { ...r, data: { ...r.data, [field]: value } } : r);
-          return validateRows(updated, []);
-      });
-  };
-
-  const deleteManualDraft = (id: string) => {
-      setManualDrafts(prev => validateRows(prev.filter(r => r.id !== id), []));
-  };
-
-  const submitManualDrafts = () => {
-      const invalidCount = manualDrafts.filter(r => !r.isValid).length;
-      if (invalidCount > 0) {
-          alert(`Please fix ${invalidCount} errors in the draft list before submitting.`);
+      e.preventDefault();
+      console.log("Add to Draft clicked");
+      const newEntry = validateAndPrepareAccount();
+      if (!newEntry) {
+          console.warn("Validation failed for draft");
           return;
       }
-      if (manualDrafts.length === 0) return;
 
-      const payload = mapRowsToPayload(manualDrafts);
-      if(window.confirm(`Are you sure you want to submit ${payload.length} accounts?`)) {
-          onBulkSave(payload);
-          setManualDrafts([]);
+      setDrafts([...drafts, newEntry]);
+      console.log("Added to draft. Total drafts:", drafts.length + 1);
+      resetFormPartial();
+  };
+
+  const handleDirectSave = async (e: React.MouseEvent) => {
+      e.preventDefault();
+      console.log("Direct Save clicked");
+      const newEntry = validateAndPrepareAccount();
+      if (!newEntry) {
+          console.warn("Validation failed for direct save");
+          return;
+      }
+
+      setIsSubmitting(true);
+      try {
+          console.log("Starting direct save process for:", newEntry);
+          
+          // Check if center exists, if not, try to create it.
+          const code = newEntry.center_code;
+          const branchId = newEntry.branch_id;
+          const exists = centers.some(c => c.centerCode === code && c.branchId === branchId);
+          
+          if (!exists) {
+              console.log(`Center ${code} not found in branch ${branchId}, creating...`);
+              const newCenter: Omit<Center, 'id'> = {
+                  centerCode: code,
+                  centerName: `Center ${code}`,
+                  branchId: branchId,
+                  assignedEmployeeId: newEntry.opened_by_employee_id,
+                  type: code % 2 !== 0 ? 'OWN' : 'OFFICE',
+                  memberCount: 0,
+                  status: 'ACTIVE'
+              };
+              await onAddCenter(newCenter);
+              console.log("Center created successfully");
+          }
+
+          // Use onBulkSave with single item to ensure collection record is also created
+          console.log("Calling onBulkSave with entry");
+          await onBulkSave([newEntry]);
+          console.log("onBulkSave completed");
+          
+          setSuccessMessage(`Account ${newEntry.account_code} saved successfully!`);
+          setTimeout(() => setSuccessMessage(null), 3000);
+          resetFormPartial();
+      } catch (error: any) {
+          console.error("Direct Save Error:", error);
+          alert(`Failed to save: ${error.message}`);
+      } finally {
+          setIsSubmitting(false);
       }
   };
 
-  // --- BULK MODE HANDLERS ---
-
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    try {
-        const data = await file.arrayBuffer();
-        const workbook = XLSX.read(data, { type: 'array' });
-        const sheetName = workbook.SheetNames[0];
-        const sheet = workbook.Sheets[sheetName];
-        const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-
-        if (jsonData.length < 2) {
-            alert("File appears empty or missing headers");
-            return;
-        }
-
-        const headers = (jsonData[0] as string[]).map(h => String(h).toLowerCase().trim());
-        const idxCode = headers.findIndex(h => h.includes('code') || h.includes('account'));
-        const idxAmt = headers.findIndex(h => h.includes('amount') || h.includes('collection'));
-        const idxTerm = headers.findIndex(h => h.includes('term'));
-        const idxDate = headers.findIndex(h => h.includes('date'));
-        const idxEmp = headers.findIndex(h => h.includes('employee'));
-
-        if (idxCode === -1 || idxAmt === -1 || idxTerm === -1 || idxDate === -1 || idxEmp === -1) {
-            alert("Missing required columns. Please use the template.");
-            return;
-        }
-
-        const newRows: EditableRow[] = jsonData.slice(1).map((row: any) => {
-            let dateVal = row[idxDate];
-            if (typeof dateVal === 'number') {
-                const d = new Date(Math.round((dateVal - 25569) * 86400 * 1000));
-                dateVal = d.toISOString().slice(0, 10);
-            }
-
-            return {
-                id: Math.random().toString(36).substr(2, 9),
-                data: {
-                    accountCode: row[idxCode] ? String(row[idxCode]) : '',
-                    amount: row[idxAmt] ? String(row[idxAmt]) : '',
-                    term: row[idxTerm] ? String(row[idxTerm]) : '',
-                    date: dateVal ? String(dateVal) : '',
-                    employeeId: row[idxEmp] ? String(row[idxEmp]) : ''
-                },
-                errors: {},
-                warning: '',
-                isValid: true
-            };
-        });
-
-        const validatedRows = validateRows(newRows, []);
-        setBulkRows(validatedRows);
-
-    } catch (err) {
-        console.error("Excel parse error", err);
-        alert("Failed to parse file. Ensure it is a valid Excel or CSV.");
-    }
-    
-    if (fileInputRef.current) fileInputRef.current.value = '';
+  const removeDraft = (idx: number) => {
+      setDrafts(prev => prev.filter((_, i) => i !== idx));
   };
 
-  const handleBulkCellChange = (id: string, field: keyof EditableRow['data'], value: string) => {
-      setBulkRows(prev => {
-          const updated = prev.map(r => r.id === id ? { ...r, data: { ...r.data, [field]: value } } : r);
-          return validateRows(updated, []);
-      });
-  };
+  const handleFinalSubmit = async () => {
+      if (drafts.length === 0) {
+          console.warn("[Submit All] No drafts to submit.");
+          return;
+      }
+      
+      // Remove native confirm to prevent blocking issues. 
+      // We can assume the user clicking "Submit All" is confirmation enough, 
+      // or we could implement a custom modal if needed. For now, direct submit is better for UX.
+      
+      setIsSubmitting(true);
+      setSuccessMessage(null);
+      console.log(`[Submit All] Process started for ${drafts.length} accounts.`);
 
-  const deleteBulkRow = (id: string) => {
-      setBulkRows(prev => validateRows(prev.filter(r => r.id !== id), []));
-  };
-
-  const handleDownloadSample = () => {
-    const headers = ['Account Code', 'Collection Amount', 'Term (Years)', 'Opening Date', 'Opened By (Employee ID)'];
-    const empId = employees[0]?.id || 'E-101';
-    
-    const sampleRows = [
-      ['ACC-9001', '1200', '5', new Date().toISOString().slice(0, 10), empId],
-      ['ACC-9002', '5000', '10', new Date().toISOString().slice(0, 10), empId]
-    ];
-    
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet([headers, ...sampleRows]);
-    XLSX.utils.book_append_sheet(wb, ws, "Template");
-    XLSX.writeFile(wb, "account_import_template.xlsx");
-  };
-
-  const mapRowsToPayload = (rows: EditableRow[]): Omit<AccountOpening, 'id'>[] => {
-      return rows.map(r => {
-          const emp = employees.find(e => e.id.toLowerCase() === r.data.employeeId.toLowerCase());
-          return {
-              account_code: r.data.accountCode,
-              term: parseFloat(r.data.term),
-              collection_amount: parseFloat(r.data.amount),
-              opened_by_employee_id: emp?.id || r.data.employeeId,
-              branch_id: emp?.branch_id || '',
-              opening_date: r.data.date,
+      try {
+          // --- SANITIZATION PHASE ---
+          // Explicitly convert all fields to safe values to avoid 'undefined' in payload
+          const safeDrafts = drafts.map(d => ({
+              ...d,
+              account_code: String(d.account_code || '').trim(),
+              center_code: Number(d.center_code) || 0,
+              branch_id: String(d.branch_id || ''),
+              opened_by_employee_id: String(d.opened_by_employee_id || ''),
+              customer_name: String(d.customer_name || '').trim(),
+              father_husband_name: String(d.father_husband_name || '').trim(),
+              mobile: String(d.mobile || '').trim(),
+              nid: String(d.nid || '').trim(),
+              address: String(d.address || '').trim(),
+              collection_amount: Number(d.collection_amount) || 0,
+              term: Number(d.term) || 0,
+              // Ensure optional fields are strings
+              gender: d.gender || 'MALE',
+              dob: d.dob || '',
+              nominee_name: d.nominee_name || '',
+              nominee_relation: d.nominee_relation || '',
+              agent_name: d.agent_name || '',
+              opening_date: d.opening_date || new Date().toISOString().slice(0, 10),
+              status: 'ACTIVE' as const,
               is_counted: false,
               counted_month: null,
               salary_sheet_id: null
-          };
-      });
-  };
+          }));
 
-  const handleFinalBulkSubmit = () => {
-      const invalidCount = bulkRows.filter(r => !r.isValid).length;
-      if (invalidCount > 0) {
-          alert(`Please fix ${invalidCount} errors before submitting.`);
-          return;
+          console.log("[Submit All] Payload prepared:", safeDrafts);
+
+          // --- LOGIC FOR AUTO-CREATING CENTERS ---
+          const centersToCreate = new Map<string, Omit<Center, 'id'>>();
+
+          for (const draft of safeDrafts) {
+              const code = draft.center_code;
+              const branchId = draft.branch_id;
+              
+              // Check if center exists in the specific branch
+              const exists = centers.some(c => c.centerCode === code && c.branchId === branchId);
+              
+              // Check if we already queued it for creation in this batch
+              const key = `${branchId}-${code}`;
+              const alreadyQueued = centersToCreate.has(key);
+              
+              if (!exists && !alreadyQueued) {
+                  // Prepare new center record
+                  const newCenter: Omit<Center, 'id'> = {
+                      centerCode: code,
+                      centerName: `Center ${code}`, // Default name for auto-created center
+                      branchId: branchId,
+                      assignedEmployeeId: draft.opened_by_employee_id, // Assign to the opener
+                      type: code % 2 !== 0 ? 'OWN' : 'OFFICE', // Odd=OWN, Even=OFFICE convention
+                      memberCount: 0,
+                      status: 'ACTIVE'
+                  };
+                  centersToCreate.set(key, newCenter);
+              }
+          }
+
+          // Create missing centers silently
+          if (centersToCreate.size > 0) {
+              console.log(`[Submit All] Auto-creating ${centersToCreate.size} missing centers...`);
+              for (const center of centersToCreate.values()) {
+                  try {
+                      await onAddCenter(center);
+                  } catch (centerErr) {
+                      console.error("Failed to auto-create center, continuing with accounts...", centerErr);
+                  }
+              }
+          }
+          // ---------------------------------------
+
+          console.log("[Submit All] Sending to backend API...");
+          
+          // The backend service is updated to loop and submit one by one.
+          // We just await the bulk promise here.
+          await onBulkSave(safeDrafts);
+          
+          console.log("[Submit All] API call successful.");
+          setDrafts([]);
+          setSuccessMessage("All accounts have been successfully saved to the database!");
+          setTimeout(() => setSuccessMessage(null), 5000);
+      } catch (error: any) {
+          console.error("[Submit All] API Error:", error);
+          const errMsg = error?.message || String(error);
+          alert(`FAILED to save accounts.\n\nServer Response: ${errMsg}\n\nPlease check your connection and try again.`);
+      } finally {
+          setIsSubmitting(false);
       }
-      if (bulkRows.length === 0) return;
-
-      const payload = mapRowsToPayload(bulkRows);
-      onBulkSave(payload);
-      setBulkRows([]);
-      setMode('SINGLE');
-      alert(`✔ ${payload.length} accounts successfully imported!`);
   };
-
-  // --- RENDER HELPERS ---
-  const renderTable = (rows: EditableRow[], onChange: any, onDelete: any) => (
-    <div className="border border-slate-200 rounded-xl overflow-hidden max-h-[400px] overflow-y-auto custom-scrollbar relative">
-        <table className="w-full text-left text-xs border-collapse">
-            <thead className="bg-slate-100 text-slate-600 font-bold uppercase sticky top-0 z-10 shadow-sm">
-                <tr>
-                    <th className="p-3 border-b">Account Code</th>
-                    <th className="p-3 border-b">Amount</th>
-                    <th className="p-3 border-b">Term</th>
-                    <th className="p-3 border-b">Date</th>
-                    <th className="p-3 border-b">Employee ID</th>
-                    <th className="p-3 border-b w-10"></th>
-                </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 bg-white">
-                {rows.map((row) => (
-                    <tr key={row.id} className={`group transition-colors ${row.isValid ? 'hover:bg-slate-50' : 'bg-red-50 hover:bg-red-100'}`}>
-                        <td className="p-2 border-r border-slate-100 relative">
-                            <input 
-                                type="text" 
-                                value={row.data.accountCode}
-                                onChange={e => onChange(row.id, 'accountCode', e.target.value)}
-                                className={`w-full bg-transparent outline-none font-mono ${row.errors.accountCode ? 'text-red-600 font-bold' : 'text-slate-700'}`}
-                            />
-                            {row.errors.accountCode && <div className="text-[9px] text-red-500 absolute bottom-0 left-2">{row.errors.accountCode}</div>}
-                        </td>
-                        <td className="p-2 border-r border-slate-100 relative">
-                            <input 
-                                type="number" 
-                                value={row.data.amount}
-                                onChange={e => onChange(row.id, 'amount', e.target.value)}
-                                className={`w-full bg-transparent outline-none ${row.errors.amount ? 'text-red-600 font-bold' : 'text-slate-700'}`}
-                            />
-                            {row.errors.amount && <div className="text-[9px] text-red-500 absolute bottom-0 left-2">{row.errors.amount}</div>}
-                            {!row.errors.amount && row.warning && <div className="text-[9px] text-amber-500 absolute bottom-0 left-2 flex items-center gap-1"><AlertTriangle size={8}/> {row.warning}</div>}
-                        </td>
-                        <td className="p-2 border-r border-slate-100 relative">
-                            <input 
-                                type="number" 
-                                value={row.data.term}
-                                onChange={e => onChange(row.id, 'term', e.target.value)}
-                                className={`w-full bg-transparent outline-none ${row.errors.term ? 'text-red-600 font-bold' : 'text-slate-700'}`}
-                            />
-                            {row.errors.term && <div className="text-[9px] text-red-500 absolute bottom-0 left-2">{row.errors.term}</div>}
-                        </td>
-                        <td className="p-2 border-r border-slate-100 relative">
-                            <input 
-                                type="text" 
-                                value={row.data.date}
-                                onChange={e => onChange(row.id, 'date', e.target.value)}
-                                className={`w-full bg-transparent outline-none ${row.errors.date ? 'text-red-600 font-bold' : 'text-slate-700'}`}
-                                placeholder="YYYY-MM-DD"
-                            />
-                            {row.errors.date && <div className="text-[9px] text-red-500 absolute bottom-0 left-2">{row.errors.date}</div>}
-                        </td>
-                        <td className="p-2 border-r border-slate-100 relative">
-                            <input 
-                                type="text" 
-                                value={row.data.employeeId}
-                                onChange={e => onChange(row.id, 'employeeId', e.target.value)}
-                                className={`w-full bg-transparent outline-none ${row.errors.employeeId ? 'text-red-600 font-bold' : 'text-slate-700'}`}
-                            />
-                            {row.errors.employeeId && <div className="text-[9px] text-red-500 absolute bottom-0 left-2">{row.errors.employeeId}</div>}
-                        </td>
-                        <td className="p-2 text-center">
-                            <button onClick={() => onDelete(row.id)} className="p-1.5 text-slate-400 hover:text-red-600 rounded hover:bg-red-50 transition-colors">
-                                <Trash2 size={14} />
-                            </button>
-                        </td>
-                    </tr>
-                ))}
-            </tbody>
-        </table>
-    </div>
-  );
 
   return (
-    <div className="max-w-6xl mx-auto">
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-        
-        {/* Header with Tabs */}
-        <div className="bg-slate-50 border-b border-slate-200">
-            <div className="p-6 pb-4 flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                    <div className="bg-indigo-100 p-2 rounded-lg text-indigo-600">
-                        {mode === 'SINGLE' ? <FilePlus size={24} /> : <FileSpreadsheet size={24} />}
-                    </div>
-                    <div>
-                        <h2 className="text-lg font-bold text-slate-800">Add Account Opening</h2>
-                        <p className="text-sm text-slate-500">
-                            {mode === 'SINGLE' ? 'Draft & Submit manual entries' : 'Bulk import with validation'}
-                        </p>
-                    </div>
-                </div>
-                
-                <div className="flex bg-slate-200 p-1 rounded-lg">
-                    <button 
-                        onClick={() => setMode('SINGLE')}
-                        className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${mode === 'SINGLE' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-                    >
-                        Manual Entry
-                    </button>
-                    {!isNormalUser && (
-                        <button 
-                            onClick={() => setMode('BULK')}
-                            className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${mode === 'BULK' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-                        >
-                            Bulk Import
-                        </button>
-                    )}
-                </div>
-            </div>
-        </div>
-        
-        {/* MANUAL FORM */}
-        {mode === 'SINGLE' && (
-            <div className="p-6 space-y-6 animate-in fade-in duration-300">
-                <form onSubmit={handleAddToDraft} className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-slate-50/50 p-4 rounded-xl border border-slate-200">
-                    <div className="space-y-2">
-                        <label className="text-sm font-medium text-slate-700">Account Code</label>
-                        <input 
-                            type="text" 
-                            required
-                            className="w-full border border-slate-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none font-mono"
-                            placeholder="e.g. ACC-2025"
-                            value={accountCode}
-                            onChange={e => setAccountCode(e.target.value)}
-                        />
-                    </div>
+    <div className="max-w-7xl mx-auto h-full flex flex-col space-y-6 pb-12">
+      
+      {/* Header */}
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex justify-between items-center">
+          <div className="flex items-center gap-4">
+              <div className="bg-indigo-100 p-3 rounded-lg text-indigo-600">
+                  <FilePlus size={24} />
+              </div>
+              <div>
+                  <h2 className="text-xl font-bold text-slate-800">Add Account Opening</h2>
+                  <p className="text-sm text-slate-500">New Member Registration & First Deposit</p>
+              </div>
+          </div>
+          
+          {/* Draft Indicator */}
+          {drafts.length > 0 && (
+              <div className="flex items-center gap-4">
+                  <div className="text-right">
+                      <p className="text-sm font-bold text-slate-700">{drafts.length} Accounts</p>
+                      <p className="text-xs text-slate-500">Ready to submit</p>
+                  </div>
+                  <button 
+                      onClick={handleFinalSubmit}
+                      disabled={isSubmitting}
+                      className={`px-6 py-2.5 rounded-lg font-bold shadow-lg flex items-center gap-2 transition-all ${
+                          isSubmitting 
+                          ? 'bg-emerald-400 text-white cursor-not-allowed' 
+                          : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-200 active:scale-95'
+                      }`}
+                  >
+                      {isSubmitting ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+                      <span>{isSubmitting ? 'Saving...' : 'Submit All'}</span>
+                  </button>
+              </div>
+          )}
+      </div>
 
-                    <div className="space-y-2">
-                        <label className="text-sm font-medium text-slate-700">Term (Years)</label>
-                        <select 
-                            className="w-full border border-slate-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
-                            value={term}
-                            onChange={e => setTerm(Number(e.target.value))}
-                        >
-                            <option value={1.5}>1.5 Years</option>
-                            <option value={3}>3 Years</option>
-                            <option value={5}>5 Years</option>
-                            <option value={8}>8 Years</option>
-                            <option value={10}>10 Years</option>
-                            <option value={12}>12 Years</option>
-                        </select>
-                    </div>
+      {successMessage && (
+          <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 rounded-xl flex items-center gap-2 animate-fade-in">
+              <CheckCircle size={20} /> {successMessage}
+          </div>
+      )}
 
-                    <div className="space-y-2">
-                        <label className="text-sm font-medium text-slate-700">Collection Amount</label>
-                        <div className="relative">
-                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-medium">$</span>
-                            <input 
-                                type="number" 
-                                required
-                                min="0"
-                                className="w-full border border-slate-300 rounded-lg pl-8 pr-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none"
-                                placeholder="0.00"
-                                value={collectionAmount}
-                                onChange={e => setCollectionAmount(Number(e.target.value))}
-                            />
-                        </div>
-                    </div>
+      {/* Main Form Area */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          
+          {/* Left: Input Form */}
+          <div className="lg:col-span-8 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+              <div className="bg-slate-50 px-6 py-4 border-b border-slate-200 font-bold text-slate-700 flex items-center gap-2">
+                  <Edit2 size={16} /> Data Entry Form
+              </div>
+              
+              <form onSubmit={handleAddToDraft} className="p-6 space-y-8">
+                  
+                  {/* Section 1: Office Info */}
+                  <div>
+                      <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 border-b border-slate-100 pb-2">Office Information</h3>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                          <div>
+                              {!isNormalUser && (
+                                  <div className="mb-2">
+                                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Filter Employee List</label>
+                                      <select 
+                                          className="w-full p-2 bg-indigo-50 border border-indigo-100 rounded text-xs text-indigo-700 font-medium focus:ring-1 focus:ring-indigo-500 outline-none"
+                                          value={branchFilter}
+                                          onChange={e => setBranchFilter(e.target.value)}
+                                      >
+                                          <option value="">All Branches</option>
+                                          {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                                      </select>
+                                  </div>
+                              )}
 
-                    <div className="space-y-2">
-                        <label className="text-sm font-medium text-slate-700">Opening Date</label>
-                        <input 
-                            type="date" 
-                            required
-                            className="w-full border border-slate-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none"
-                            value={openingDate}
-                            onChange={e => setOpeningDate(e.target.value)}
-                        />
-                    </div>
+                              <label className="text-xs font-semibold text-slate-600 mb-1 block">Opened By (Employee)</label>
+                              {isNormalUser ? (
+                                  <div className="p-2.5 bg-slate-100 border border-slate-200 rounded-lg text-sm text-slate-600 font-medium">
+                                      {employees.find(e => e.id === currentUser.employee_id)?.name} ({currentUser.employee_id})
+                                  </div>
+                              ) : (
+                                  <select 
+                                      className="w-full p-2.5 bg-white border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                      value={formData.opened_by_employee_id}
+                                      onChange={e => handleInputChange('opened_by_employee_id', e.target.value)}
+                                  >
+                                      {filteredEmployees.map(e => <option key={e.id} value={e.id}>{e.name} - {e.designation}</option>)}
+                                  </select>
+                              )}
+                          </div>
+                          <div>
+                              <label className="text-xs font-semibold text-slate-600 mb-1 block">Branch Name</label>
+                              <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-700 font-medium flex items-center gap-2">
+                                  <MapPin size={14} className="text-slate-400" />
+                                  {selectedBranchName}
+                              </div>
+                          </div>
+                          <div>
+                              <label className="text-xs font-semibold text-slate-600 mb-1 block text-indigo-700">Center Code <span className="text-red-500">*</span></label>
+                              <div className="relative">
+                                  <input 
+                                      type="number"
+                                      required
+                                      list="centers-list"
+                                      className="w-full p-2.5 border-2 border-indigo-100 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none font-bold text-indigo-900 placeholder:text-indigo-300"
+                                      placeholder="Select Center"
+                                      value={formData.center_code}
+                                      onChange={e => handleInputChange('center_code', e.target.value)}
+                                  />
+                                  <datalist id="centers-list">
+                                      {availableCenters.map(c => (
+                                          <option key={c.id} value={c.centerCode}>{c.centerName} ({c.type})</option>
+                                      ))}
+                                  </datalist>
+                                  {selectedCenterDetails && (
+                                      <div className="absolute right-0 -bottom-5 text-[10px] text-emerald-600 font-bold flex items-center gap-1">
+                                          <CheckCircle size={10} /> {selectedCenterDetails.centerName}
+                                      </div>
+                                  )}
+                              </div>
+                          </div>
+                      </div>
+                  </div>
 
-                    <div className="space-y-2 md:col-span-2">
-                        <label className="text-sm font-medium text-slate-700">Opened By (Employee)</label>
-                        {isNormalUser ? (
-                            <div className="w-full border border-slate-200 bg-slate-100 text-slate-500 rounded-lg px-4 py-2 text-sm">
-                                {currentUser.name} (Myself)
-                            </div>
-                        ) : (
-                            <select 
-                                className="w-full border border-slate-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
-                                value={employeeId}
-                                onChange={e => setEmployeeId(e.target.value)}
-                            >
-                                {employees.map(e => (
-                                <option key={e.id} value={e.id}>{e.name} ({e.id}) - {e.designation}</option>
-                                ))}
-                            </select>
-                        )}
-                    </div>
+                  {/* Section 2: Account Details */}
+                  <div>
+                      <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 border-b border-slate-100 pb-2">Account Details</h3>
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
+                          <div className="md:col-span-2">
+                              <label className="text-xs font-semibold text-slate-600 mb-1 block">Account Code <span className="text-red-500">*</span></label>
+                              <div className="relative">
+                                  <Hash size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                                  <input 
+                                      type="text"
+                                      required
+                                      className="w-full pl-8 pr-3 py-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-mono font-bold"
+                                      placeholder="Unique ID"
+                                      value={formData.account_code}
+                                      onChange={e => handleInputChange('account_code', e.target.value)}
+                                  />
+                              </div>
+                          </div>
+                          <div>
+                              <label className="text-xs font-semibold text-slate-600 mb-1 block">Opening Date</label>
+                              <input 
+                                  type="date"
+                                  required
+                                  className="w-full p-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                  value={formData.opening_date}
+                                  onChange={e => handleInputChange('opening_date', e.target.value)}
+                              />
+                          </div>
+                          <div>
+                              <label className="text-xs font-semibold text-slate-600 mb-1 block">Term (Years)</label>
+                              <select 
+                                  className="w-full p-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                                  value={formData.term}
+                                  onChange={e => handleInputChange('term', Number(e.target.value))}
+                              >
+                                  {[1.5, 3, 5, 8, 10, 12].map(t => <option key={t} value={t}>{t} Years</option>)}
+                              </select>
+                          </div>
+                          <div className="md:col-span-2">
+                              <label className="text-xs font-semibold text-slate-600 mb-1 block">Collection Amount (First Deposit)</label>
+                              <div className="relative">
+                                  <span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-slate-400">৳</span>
+                                  <input 
+                                      type="number"
+                                      required
+                                      min="0"
+                                      className="w-full pl-8 pr-3 py-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-bold text-slate-800"
+                                      placeholder="0.00"
+                                      value={formData.collection_amount}
+                                      onChange={e => handleInputChange('collection_amount', e.target.value)}
+                                  />
+                              </div>
+                          </div>
+                          <div className="md:col-span-2">
+                              <label className="text-xs font-semibold text-slate-600 mb-1 block">Agent Name (Optional)</label>
+                              <input 
+                                  type="text"
+                                  className="w-full p-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                  placeholder="Reference Agent"
+                                  value={formData.agent_name}
+                                  onChange={e => handleInputChange('agent_name', e.target.value)}
+                              />
+                          </div>
+                      </div>
+                  </div>
 
-                    <div className="md:col-span-2 flex justify-end">
-                        <button 
-                            type="submit"
-                            className="bg-slate-800 hover:bg-slate-900 text-white px-6 py-2.5 rounded-lg font-medium flex items-center space-x-2 transition-colors shadow-sm"
-                        >
-                            <ListChecks size={18} />
-                            <span>Add to Draft List</span>
-                        </button>
-                    </div>
-                </form>
+                  {/* Section 3: Customer Info */}
+                  <div>
+                      <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 border-b border-slate-100 pb-2">Customer Information</h3>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                          <div className="md:col-span-2">
+                              <label className="text-xs font-semibold text-slate-600 mb-1 block">Customer Name <span className="text-red-500">*</span></label>
+                              <div className="relative">
+                                  <UserIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                                  <input 
+                                      type="text"
+                                      required
+                                      className="w-full pl-8 pr-3 py-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                      placeholder="Full Name"
+                                      value={formData.customer_name}
+                                      onChange={e => handleInputChange('customer_name', e.target.value)}
+                                  />
+                              </div>
+                          </div>
+                          <div>
+                              <label className="text-xs font-semibold text-slate-600 mb-1 block">Gender</label>
+                              <select 
+                                  className="w-full p-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                                  value={formData.gender}
+                                  onChange={e => handleInputChange('gender', e.target.value)}
+                              >
+                                  <option value="MALE">Male</option>
+                                  <option value="FEMALE">Female</option>
+                                  <option value="OTHER">Other</option>
+                              </select>
+                          </div>
+                          <div>
+                              <label className="text-xs font-semibold text-slate-600 mb-1 block">Date of Birth</label>
+                              <input 
+                                  type="date"
+                                  className="w-full p-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                  value={formData.dob}
+                                  onChange={e => handleInputChange('dob', e.target.value)}
+                              />
+                          </div>
+                          <div>
+                              <label className="text-xs font-semibold text-slate-600 mb-1 block">NID / Birth Cert No.</label>
+                              <input 
+                                  type="text"
+                                  className="w-full p-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                  placeholder="National ID"
+                                  value={formData.nid}
+                                  onChange={e => handleInputChange('nid', e.target.value)}
+                              />
+                          </div>
+                          <div>
+                              <label className="text-xs font-semibold text-slate-600 mb-1 block">Mobile Number</label>
+                              <div className="relative">
+                                  <Phone size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                                  <input 
+                                      type="text"
+                                      className="w-full pl-8 pr-3 py-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                      placeholder="017xxxxxxxx"
+                                      value={formData.mobile}
+                                      onChange={e => handleInputChange('mobile', e.target.value)}
+                                  />
+                              </div>
+                          </div>
+                          <div className="md:col-span-2">
+                              <label className="text-xs font-semibold text-slate-600 mb-1 block">Father / Husband Name</label>
+                              <input 
+                                  type="text"
+                                  className="w-full p-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                  value={formData.father_husband_name}
+                                  onChange={e => handleInputChange('father_husband_name', e.target.value)}
+                              />
+                          </div>
+                          <div className="md:col-span-3">
+                              <label className="text-xs font-semibold text-slate-600 mb-1 block">Address</label>
+                              <input 
+                                  type="text"
+                                  className="w-full p-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                  placeholder="Village, Post Office, Thana..."
+                                  value={formData.address}
+                                  onChange={e => handleInputChange('address', e.target.value)}
+                              />
+                          </div>
+                      </div>
+                  </div>
 
-                {/* Draft List Section */}
-                <div className="space-y-4 pt-4 border-t border-slate-200">
-                    <div className="flex justify-between items-center">
-                        <h3 className="font-bold text-slate-700 flex items-center gap-2">
-                            <Edit2 size={16} className="text-slate-400" />
-                            Draft Accounts (Not Saved)
-                        </h3>
-                        <span className="text-xs font-bold bg-amber-100 text-amber-700 px-2 py-1 rounded-full border border-amber-200">
-                            {manualDrafts.length} Drafts Pending
-                        </span>
-                    </div>
+                  {/* Section 4: Nominee */}
+                  <div>
+                      <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 border-b border-slate-100 pb-2">Nominee Info</h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                          <div>
+                              <label className="text-xs font-semibold text-slate-600 mb-1 block">Nominee Name</label>
+                              <input 
+                                  type="text"
+                                  className="w-full p-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                  value={formData.nominee_name}
+                                  onChange={e => handleInputChange('nominee_name', e.target.value)}
+                              />
+                          </div>
+                          <div>
+                              <label className="text-xs font-semibold text-slate-600 mb-1 block">Relation</label>
+                              <input 
+                                  type="text"
+                                  className="w-full p-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                  placeholder="e.g. Wife, Son"
+                                  value={formData.nominee_relation}
+                                  onChange={e => handleInputChange('nominee_relation', e.target.value)}
+                              />
+                          </div>
+                      </div>
+                  </div>
 
-                    {manualDrafts.length > 0 ? (
-                        <>
-                            {renderTable(manualDrafts, handleManualCellChange, deleteManualDraft)}
-                            <div className="flex justify-end pt-2">
-                                <button 
-                                    type="button"
-                                    onClick={submitManualDrafts}
-                                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-lg font-bold flex items-center space-x-2 transition-colors shadow-lg active:scale-[0.98]"
-                                >
-                                    <Save size={18} />
-                                    <span>Submit All {manualDrafts.length} Accounts</span>
-                                </button>
-                            </div>
-                        </>
-                    ) : (
-                        <div className="text-center py-8 bg-slate-50 rounded-lg border border-dashed border-slate-200 text-slate-400 text-sm">
-                            No drafts yet. Add accounts above to review them here.
-                        </div>
-                    )}
-                </div>
-            </div>
-        )}
+                  <div className="pt-4 border-t border-slate-100 flex justify-end gap-3">
+                      <button 
+                          type="button"
+                          onClick={handleDirectSave}
+                          disabled={isSubmitting}
+                          className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-green-200 active:scale-95 transition-all disabled:opacity-50"
+                      >
+                          <Save size={20} />
+                          {isSubmitting ? 'Saving...' : 'Direct Save'}
+                      </button>
+                      <button 
+                          type="submit"
+                          className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-indigo-200 active:scale-95 transition-all"
+                      >
+                          <ListChecks size={20} />
+                          Add to Draft
+                      </button>
+                  </div>
 
-        {/* BULK IMPORT FORM */}
-        {mode === 'BULK' && !isNormalUser && (
-             <div className="p-6 space-y-6 animate-in fade-in duration-300">
-                {/* 1. Instructions */}
-                <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 flex flex-col md:flex-row justify-between items-start gap-4">
-                    <div>
-                        <h4 className="text-sm font-semibold text-blue-800 mb-2">Step 1: Prepare & Upload</h4>
-                        <p className="text-xs text-blue-700 mb-2">
-                            Download the template, fill in data, then upload.
-                        </p>
-                    </div>
-                    <button onClick={handleDownloadSample} className="flex items-center space-x-2 px-4 py-2 bg-white border border-blue-200 text-blue-600 rounded-lg text-xs font-bold hover:bg-blue-50 transition-colors shadow-sm whitespace-nowrap">
-                        <Download size={16} /> <span>Download Template</span>
-                    </button>
-                </div>
+              </form>
+          </div>
 
-                {/* 2. Drop Zone */}
-                {bulkRows.length === 0 ? (
-                    <div 
-                        className={`flex flex-col items-center justify-center w-full h-40 border-2 border-dashed rounded-xl cursor-pointer transition-colors ${isDragOver ? 'border-indigo-500 bg-indigo-50' : 'border-slate-300 bg-slate-50 hover:bg-slate-100'}`}
-                        onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
-                        onDragLeave={() => setIsDragOver(false)}
-                        onDrop={(e) => {
-                            e.preventDefault();
-                            setIsDragOver(false);
-                            if (fileInputRef.current) {
-                                fileInputRef.current.files = e.dataTransfer.files;
-                                handleFileUpload({ target: fileInputRef.current } as any);
-                            }
-                        }}
-                    >
-                        <label className="flex flex-col items-center justify-center w-full h-full cursor-pointer">
-                            <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                                <Upload className={`w-10 h-10 mb-3 ${isDragOver ? 'text-indigo-500' : 'text-slate-400'}`} />
-                                <p className="mb-1 text-sm text-slate-600"><span className="font-semibold">Click to upload</span> or drag and drop</p>
-                                <p className="text-xs text-slate-400">Excel (.xlsx) or CSV</p>
-                            </div>
-                            <input ref={fileInputRef} type="file" className="hidden" accept=".csv, .xlsx, .xls" onChange={handleFileUpload} />
-                        </label>
-                    </div>
-                ) : (
-                    <div className="space-y-4">
-                        {/* 3. Review & Edit */}
-                        <div className="flex justify-between items-center bg-slate-50 p-3 rounded-lg border border-slate-200">
-                            <h3 className="font-bold text-slate-700 text-sm flex items-center gap-2">
-                                <Edit2 size={16} /> Step 2: Review Data
-                            </h3>
-                            <div className="flex gap-3 text-xs font-bold">
-                                <span className="text-emerald-600 bg-emerald-50 px-2 py-1 rounded border border-emerald-100">{bulkRows.filter(r => r.isValid).length} Valid</span>
-                                <span className="text-red-600 bg-red-50 px-2 py-1 rounded border border-red-100">{bulkRows.filter(r => !r.isValid).length} Errors</span>
-                            </div>
-                        </div>
+          {/* Right: Draft List */}
+          <div className="lg:col-span-4 space-y-4">
+              <div className="bg-slate-800 text-white p-4 rounded-xl shadow-lg">
+                  <div className="flex items-center gap-3 mb-2">
+                      <div className="p-2 bg-white/10 rounded-lg"><Users size={20} /></div>
+                      <div>
+                          <h3 className="font-bold">Draft Summary</h3>
+                          <p className="text-xs text-slate-400">{drafts.length} Pending Entries</p>
+                      </div>
+                  </div>
+                  
+                  {drafts.length > 0 && (
+                      <button 
+                          onClick={handleFinalSubmit}
+                          disabled={isSubmitting}
+                          className="w-full mt-3 bg-white text-slate-900 py-2 rounded-lg font-bold text-sm hover:bg-slate-100 transition-colors flex justify-center items-center gap-2 shadow-sm active:scale-[0.98]"
+                      >
+                          {isSubmitting ? <RefreshCw size={14} className="animate-spin" /> : <UploadCloud size={14} />}
+                          Submit All ({drafts.length})
+                      </button>
+                  )}
+              </div>
 
-                        {renderTable(bulkRows, handleBulkCellChange, deleteBulkRow)}
-
-                        {/* Actions */}
-                        <div className="flex justify-end gap-3 pt-2">
-                             <button type="button" onClick={() => { setBulkRows([]); }} className="px-4 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 text-sm font-medium transition-colors">
-                                Cancel Import
-                             </button>
-                             <button type="button" onClick={handleFinalBulkSubmit} disabled={bulkRows.some(r => !r.isValid)} className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg font-medium flex items-center space-x-2 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
-                                <Save size={18} />
-                                <span>Final Submit ({bulkRows.length} Rows)</span>
-                            </button>
-                        </div>
-                    </div>
-                )}
-             </div>
-        )}
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden max-h-[600px] overflow-y-auto custom-scrollbar">
+                  {drafts.length === 0 ? (
+                      <div className="p-8 text-center text-slate-400">
+                          <FilePlus size={48} className="mx-auto mb-3 opacity-20" />
+                          <p className="text-sm font-medium">No drafts yet</p>
+                          <p className="text-xs mt-1">Fill the form to add entries</p>
+                      </div>
+                  ) : (
+                      <div className="divide-y divide-slate-100">
+                          {drafts.map((draft, idx) => (
+                              <div key={idx} className="p-4 hover:bg-slate-50 transition-colors group relative">
+                                  <button 
+                                      onClick={() => removeDraft(idx)}
+                                      className="absolute top-2 right-2 text-slate-300 hover:text-red-500 p-1 opacity-0 group-hover:opacity-100 transition-all"
+                                  >
+                                      <Trash2 size={16} />
+                                  </button>
+                                  <div className="flex justify-between items-start mb-1">
+                                      <span className="font-mono font-bold text-slate-700 text-sm">{draft.account_code}</span>
+                                      <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">৳{draft.collection_amount}</span>
+                                  </div>
+                                  <div className="text-sm font-medium text-slate-800 mb-1">{draft.customer_name}</div>
+                                  <div className="flex items-center gap-2 text-xs text-slate-500">
+                                      <span className="bg-slate-100 px-1.5 rounded">Center {draft.center_code}</span>
+                                      <span>•</span>
+                                      <span>{draft.term} Yrs</span>
+                                  </div>
+                              </div>
+                          ))}
+                      </div>
+                  )}
+              </div>
+          </div>
 
       </div>
     </div>
